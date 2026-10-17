@@ -21,11 +21,16 @@ arriba a la izquierda → New organization) y el proyecto dentro de ella.
       Son datos públicos (van dentro de la web); lo que protege los datos son las reglas
       RLS. Haz commit y push, o pídeselo a Claude.
 
-## 2. Ejecutar la migración inicial
+## 2. Ejecutar las migraciones
+
+Hay seis archivos en `supabase/migrations/` (0001 a 0006). La forma cómoda es el punto 3:
+con el secret puesto, el workflow "Migraciones Supabase" las aplica todas en orden y en
+cada push futuro. Si prefieres a mano:
 
 - [ ] Supabase → proyecto Nidito → **SQL Editor** (menú lateral).
-- [ ] Pega el contenido completo de `supabase/migrations/0001_init.sql` y pulsa **Run**.
-      Debe decir *Success*. Si da error, copia el mensaje tal cual y pégaselo a Claude.
+- [ ] Pega el contenido completo de `0001_init.sql` y pulsa **Run**. Debe decir *Success*.
+      Repite con 0002, 0003, 0004, 0005 y 0006, **en ese orden**. Si alguna da error, copia
+      el mensaje tal cual y pégaselo a Claude.
 
 ## 3. Secret de la base de datos (para que las migraciones siguientes se apliquen solas)
 
@@ -76,3 +81,24 @@ punto 5; cambia el nombre del proyecto y la URL del proyecto de Supabase por los
 
 - iPhone (Safari): abre la dirección → botón compartir → "Añadir a pantalla de inicio".
 - Android (Chrome): abre la dirección → menú ⋮ → "Instalar aplicación".
+
+## 9. Funciones de Supabase (avisos y correo)
+
+- [ ] Supabase → Account settings → Access Tokens: generar uno y guardarlo en GitHub como
+      secret `SUPABASE_ACCESS_TOKEN`. El workflow "Funciones Supabase" publica
+      `notify-partner` e `ingest-email` en cada push que las toque (o lánzalo a mano desde
+      Actions).
+- [ ] Avisos en el móvil: `node scripts/generar-claves-vapid.mjs`, los secrets
+      `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` y `VAPID_SUBJECT` en Supabase → Edge
+      Functions → Secrets, y la clave pública en `.env`. Pasos completos en `docs/AVISOS.md`.
+- [ ] Correo automático (opcional, solo si hay volumen): `docs/CORREO.md`. Si queréis que
+      Claude lea los correos de inmobiliarias, secret `ANTHROPIC_API_KEY` en Supabase.
+- [ ] Compartir enlaces desde el iPhone: `docs/ENLACES.md` (cada uno en su móvil).
+
+## 10. Después de la primera semana
+
+- [ ] Ajustes → Vuestros criterios: precio máximo, m², habitaciones, imprescindibles.
+- [ ] Mapa → botón de zonas → dibujar los barrios donde buscáis.
+- [ ] Ajustes → Hipoteca y gastos: alquiler actual, entrada, tipo y plazo. Verificar el
+      ITP y las bonificaciones en la web de la Comunidad de Madrid.
+- [ ] Ajustes → Lugares importantes: el trabajo de cada uno.

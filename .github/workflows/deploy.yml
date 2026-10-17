@@ -1,5 +1,5 @@
 # Publica la web en GitHub Pages en cada push a main.
-# 1) instala dependencias  2) ejecuta los tests  3) construye  4) sube dist/ a la rama gh-pages
+# 1) instala dependencias  2) tests y prueba de base de datos  3) construye  4) sube dist/ a gh-pages
 name: Deploy a GitHub Pages
 
 on:
@@ -30,6 +30,9 @@ jobs:
 
       - name: Tests
         run: npm test
+
+      - name: Migraciones y RLS en PGlite
+        run: npm run test:db
 
       - name: Build
         run: npm run build

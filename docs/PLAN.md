@@ -153,15 +153,23 @@ como `save_expense` en GasTitos.
 | Fase | Contenido | Tamaño | Hecho cuando |
 | --- | --- | --- | --- |
 | **0 · Esqueleto** ✅ 2026-10-17 | Repositorio copiado de GasTitos: login, hogar con código, PWA, workflows | S | Los dos entráis y estáis en el mismo hogar |
-| **1 · Casas a mano, pegar texto, mapa y lista** | Alta manual con buscador de dirección, lector de texto pegado, ficha, estados, mapa con pines, lista con orden y filtros | L | Un anuncio pegado desde el móvil aparece en el mapa y la lista del otro |
-| **2 · Valoraciones a dos** | Aspectos, estrellas y comentarios, nota conjunta, desacuerdos, a ciegas, veto, avisos | M | La nota conjunta cuadra y, a ciegas, no ves lo del otro hasta valorar tú |
-| **3 · Criterios, zonas y enlaces** | Criterios y zonas con encaje y avisos, duplicados, historial de precio, atajo para compartir | M | Compartir un anuncio desde Idealista crea la casa y no se duplica |
-| **4 · Correo automático** (solo si el volumen lo justifica) | Gmail con Apps Script, lector, Bandeja y Descartadas, API de Idealista si la aprueban | L | Un correo real acaba en la Bandeja o en Descartadas con su motivo |
-| **Después** (solo si seguís buscando) | Coste total e hipoteca, metro, visitas, contactos, notas de barrio, comparador, CSV | a demanda | Una cosa cada vez |
+| **1 · Casas a mano, pegar texto, mapa y lista** ✅ 2026-10-17 | Alta manual con buscador de dirección, lector de texto pegado, ficha, estados, mapa con pines, lista con orden y filtros | L | Un anuncio pegado desde el móvil aparece en el mapa y la lista del otro |
+| **2 · Valoraciones a dos** ✅ 2026-10-17 | Aspectos, estrellas y comentarios, nota conjunta, desacuerdos, a ciegas, veto, avisos | M | La nota conjunta cuadra y, a ciegas, no ves lo del otro hasta valorar tú |
+| **3 · Criterios, zonas y enlaces** ✅ 2026-10-17 | Criterios y zonas con encaje y avisos, duplicados, historial de precio, atajo para compartir | M | Compartir un anuncio desde Idealista crea la casa y no se duplica |
+| **4 · Correo automático** ✅ 2026-10-17 (construido; montar solo si hay volumen) | Gmail con Apps Script, lector, Bandeja y Descartadas, API de Idealista si la aprueban | L | Un correo real acaba en la Bandeja o en Descartadas con su motivo |
+| **Después** ✅ 2026-10-17 (todo menos minutos al metro) | Coste total e hipoteca, metro, visitas, contactos, notas de barrio, comparador, CSV | a demanda | Una cosa cada vez |
 
 Al acabar la fase 3 se decide, con un mes de uso real, si la 4 se hace y qué sale del
 cajón. Una búsqueda de casa dura meses, no años: lo que no se use cada semana no merece
 una sesión.
+
+### Cambios respecto al plan al construirlo
+
+- Sin PostGIS: `point_in_polygon` y `distance_m` propias (probables en local con PGlite).
+- Minutos al metro con el CRTM queda pendiente; en su lugar, lugares importantes con
+  distancia y enlace a Google Maps en transporte.
+- El lector de "Pegar texto" es de reglas; Claude solo en la función de correo, opcional.
+- Pruebas de base de datos y RLS en local (`npm run test:db`), con PGlite.
 
 ## 10. Decisiones
 

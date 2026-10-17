@@ -16,11 +16,16 @@ publica la web) salvo que diga lo contrario.
 
 - Frontend: Vue 3 + TypeScript + Vite. Router en modo hash. Sin Pinia (estado en
   composables `src/composables/`).
-- Backend: Supabase (Postgres + Auth). Cliente en `src/supabase.ts`. PostGIS a partir
-  de la fase 3 (zonas y distancias).
+- Backend: Supabase (Postgres + Auth + Storage + Edge Functions). Cliente en
+  `src/supabase.ts`. Sin PostGIS: `point_in_polygon` y `distance_m` son funciones SQL
+  propias (migración 0004).
 - Mapa: Leaflet sobre OpenStreetMap (fase 1). Atribución visible siempre; las teselas
   no se guardan para uso sin conexión (lo prohíbe la política de OSM).
 - Tests: Vitest (`npm test`). Los tests viven junto al código (`*.spec.ts`).
+  Base de datos: `npm run test:db` aplica las migraciones en un Postgres de mentira
+  (PGlite) e imita Supabase (auth.uid(), roles anon/authenticated) para probar RLS y
+  funciones con dos usuarios y un extraño. TODA migración nueva añade sus escenarios en
+  `scripts/test-db.mjs`.
 - Publicación: GitHub Pages desde la rama `gh-pages`, base `/Nidito/`.
 - Automatismos: `.github/workflows/` (deploy, migraciones, keepalive).
 
@@ -31,6 +36,7 @@ npm install        # primera vez
 npm run dev        # servidor local
 npm test           # tests
 npm run build      # typecheck + build (lo mismo que hace el deploy)
+npm run test:db    # migraciones + RLS en PGlite (sin tocar Supabase)
 npm run icons      # regenera los iconos PNG y el favicon a partir del logo
 ```
 
@@ -56,11 +62,16 @@ GitHub Actions.
   garantiza en la base de datos, no solo en la interfaz. Lo del hogar lo ven los dos;
   las valoraciones solo las edita su autor (y, en modo a ciegas, la base de datos
   esconde las del otro hasta que tú has puntuado).
-- Las casas se crean y editan SIEMPRE con la función `save_property` (RPC, fase 1),
-  nunca con insert/update directos: es la única puerta y es la que aplica criterios,
-  busca duplicados y apunta el historial de precio.
+- Las casas se crean y editan SIEMPRE con la función `save_property` (RPC), nunca con
+  insert/update directos (no hay política que lo permita): es la única puerta, apunta el
+  historial de precio y aplica los criterios. `_save_property` es la pieza interna que
+  también usan `register_link` (atajo) e `ingest_email` (correo).
+- El lector de texto (`src/lib/parseListing.ts`) tiene una COPIA en
+  `supabase/functions/ingest-email/parseListing.ts`; un test comprueba que son idénticas.
+  Si cambias uno, copia el otro.
 - Los componentes reciben datos por props y emiten eventos; las llamadas a Supabase
-  se concentran en `src/composables/useData.ts` (fase 1) y `useSession.ts`.
+  se concentran en `src/composables/useData.ts` y `useSession.ts`. Mapa y lista comparten
+  filtros (`useFilters.ts`) y la lista visible (`useVisible.ts`).
 - Diseño: tokens en `src/style.css`. Colores de persona: `--casa` (terracota, "yo")
   y `--pareja` (verde azulado). `.space-yo` / `.space-pareja` fijan `--accent`.
   Modales con `components/Sheet.vue`. Avisos breves con `useToast()`.
@@ -79,9 +90,16 @@ con una bolita, no como pestaña nueva.
 
 ## Modelo de datos (resumen)
 
-Ver `docs/MODELO-DATOS.md`. Fase 0: `households` (1 pareja) y `household_members`
-(máx. 2, uno por usuario), copiados de GasTitos. Fase 1: `properties`, `photos`,
-`price_history`. Fase 2: `rating_aspects`, `ratings`, `property_reactions`, `comments`.
+Ver `docs/MODELO-DATOS.md`. `households` + `household_members` (hogar de dos),
+`properties` + `price_history` + `photos` (casas), `rating_aspects` + `ratings` +
+`property_reactions` + `comments` (valoraciones; a ciegas por RLS), `criteria` + `zones`
+(encaje), `ingest_tokens` (códigos secretos), `inbound_messages` (correo), `places`,
+`visits`, `contact_log`, `zone_notes` (después), `push_subscriptions` (avisos).
+
+## Funciones de Supabase
+
+`notify-partner` (avisos Web Push, con sesión) e `ingest-email` (correo, sin sesión: el
+código secreto del cuerpo identifica a la persona). Las publica `funciones.yml`.
 
 ## Documentación
 
@@ -90,7 +108,9 @@ Ver `docs/MODELO-DATOS.md`. Fase 0: `households` (1 pareja) y `household_members
   vistas, modelo de datos, fases y decisiones.
 - `docs/MODELO-DATOS.md` — tablas y reglas de visibilidad.
 - `docs/CONFIGURACION-MANUAL.md` — pasos que solo puede hacer el dueño (Supabase,
-  secrets, Pages, usuarios).
+  secrets, Pages, usuarios, funciones).
+- `docs/AVISOS.md` — avisos en el móvil. `docs/ENLACES.md` — atajo de iPhone.
+  `docs/CORREO.md` — correo automático con Apps Script.
 
 Al terminar una sesión con cambios relevantes, actualiza `docs/README.md`
 (sección "Estado" y "Pendiente").
