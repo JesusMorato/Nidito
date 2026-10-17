@@ -30,6 +30,7 @@ const f = reactive({
   extras: { ...(base.extras ?? {}) } as Extras,
   orientacion: base.extras?.orientacion ?? '',
   certificado: base.extras?.certificado ?? '',
+  obra_nueva: !!(base.extras as Record<string, unknown> | undefined)?.obra_nueva,
   community_fee: num(base.community_fee),
   ibi: num(base.ibi),
   url: base.url ?? '',
@@ -75,6 +76,8 @@ function submit() {
   else delete extras.orientacion
   if (f.certificado) extras.certificado = f.certificado.toUpperCase()
   else delete extras.certificado
+  if (f.obra_nueva) (extras as Record<string, unknown>).obra_nueva = true
+  else delete (extras as Record<string, unknown>).obra_nueva
   const input: PropertyInput = {
     id: props.initial?.id,
     title: f.title.trim(),
@@ -219,6 +222,7 @@ function submit() {
             <input id="pf-contact" v-model="f.contact" />
           </div>
         </div>
+        <label class="check field"><input v-model="f.obra_nueva" type="checkbox" /> Obra nueva (paga IVA en vez de ITP)</label>
         <div class="field">
           <label for="pf-notes">Notas</label>
           <textarea id="pf-notes" v-model="f.notes" rows="3" />

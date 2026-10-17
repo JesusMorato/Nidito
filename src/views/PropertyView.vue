@@ -82,7 +82,9 @@ async function merge(other: Property) {
 function fillFromText() {
   if (!p.value?.raw_text) return
   const parsed = parseListing(p.value.raw_text)
-  const merged = { ...parsed, ...Object.fromEntries(Object.entries(p.value).filter(([, v]) => v != null && v !== '')), id: p.value.id, title: p.value.title, extras: { ...(parsed.extras ?? {}), ...(p.value.extras ?? {}) } } as Property
+  // Lo que ya tiene la ficha manda; lo que falte lo pone el lector. El tipo 'piso' es el valor
+  // por defecto, así que ahí se prefiere lo que diga el texto.
+  const merged = { ...parsed, ...Object.fromEntries(Object.entries(p.value).filter(([, v]) => v != null && v !== '')), id: p.value.id, title: p.value.title, type: p.value.type !== 'piso' ? p.value.type : parsed.type ?? 'piso', extras: { ...(parsed.extras ?? {}), ...(p.value.extras ?? {}) } } as Property
   editor.openEdit(merged)
 }
 async function pickStatus(s: PropertyStatus) {
