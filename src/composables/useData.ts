@@ -3,7 +3,7 @@
 // llaman a Supabase directamente. Las casas se guardan SIEMPRE con save_property.
 import { computed, reactive, ref } from 'vue'
 import { supabase } from '../supabase'
-import type { Aspect, Comment, Criteria, IngestToken, Photo, PriceEntry, Property, PropertyInput, PropertyStatus, PushSubscriptionRow, Rating, Reaction, Zone } from '../types'
+import type { Aspect, Comment, Criteria, InboundMessage, IngestToken, Photo, PriceEntry, Property, PropertyInput, PropertyStatus, PushSubscriptionRow, Rating, Reaction, Zone } from '../types'
 import { isNetworkError, loadSnapshot, saveSnapshot } from '../lib/offline'
 import { resizeImage } from '../lib/resizeImage'
 
@@ -20,9 +20,10 @@ interface State {
   comments: Comment[]
   criteria: Criteria | null
   zones: Zone[]
+  inbound: InboundMessage[]
 }
 
-const state = reactive<State>({ loadedFor: null, loadedAt: 0, loading: false, properties: [], photos: [], prices: [], aspects: [], ratings: [], reactions: [], comments: [], criteria: null, zones: [] })
+const state = reactive<State>({ loadedFor: null, loadedAt: 0, loading: false, properties: [], photos: [], prices: [], aspects: [], ratings: [], reactions: [], comments: [], criteria: null, zones: [], inbound: [] })
 /** true mientras enseñamos la copia local porque el servidor no responde. */
 const offline = ref(false)
 /** URLs firmadas de las fotos (el cubo es privado), por ruta. Caducan en una hora. */
@@ -41,7 +42,7 @@ function normalise(p: Record<string, unknown>): Property {
 }
 
 async function fetchAll(hid: string) {
-  const [pr, ph, pc, as, ra, re, co, cr, zo] = await Promise.all([
+  const [pr, ph, pc, as, ra, re, co, cr, zo, im] = await Promise.all([
     supabase.from('properties').select('*').order('created_at', { ascending: false }),
     supabase.from('photos').select('*').order('created_at', { ascending: true }),
     supabase.from('price_history').select('*').order('seen_at', { ascending: true }),
@@ -51,8 +52,9 @@ async function fetchAll(hid: string) {
     supabase.from('comments').select('*').order('created_at', { ascending: true }),
     supabase.from('criteria').select('*').maybeSingle(),
     supabase.from('zones').select('*').order('created_at', { ascending: true }),
+    supabase.from('inbound_messages').select('id, household_id, user_id, message_id, from_addr, subject, received_at, status, detail, property_ids, created_at').order('received_at', { ascending: false }).limit(30),
   ])
-  const err = pr.error ?? ph.error ?? pc.error ?? as.error ?? ra.error ?? re.error ?? co.error ?? cr.error ?? zo.error
+  const err = pr.error ?? ph.error ?? pc.error ?? as.error ?? ra.error ?? re.error ?? co.error ?? cr.error ?? zo.error ?? im.error
   if (err) throw new Error(err.message)
   state.properties = (pr.data ?? []).map((r) => normalise(r as Record<string, unknown>))
   state.photos = (ph.data ?? []) as Photo[]
@@ -63,6 +65,7 @@ async function fetchAll(hid: string) {
   state.comments = (co.data ?? []) as Comment[]
   state.criteria = (cr.data as Criteria | null) ?? null
   state.zones = (zo.data ?? []) as Zone[]
+  state.inbound = (im.data ?? []) as InboundMessage[]
   state.loadedFor = hid
   state.loadedAt = Date.now()
   offline.value = false
@@ -323,6 +326,20 @@ export function useData() {
     fail(error)
   }
 
+  // ---------- Bandeja (fase 4) ----------
+  const inboxItems = computed(() => state.properties.filter((p) => !p.merged_into && p.inbox === 'bandeja'))
+  const autoDiscarded = computed(() => state.properties.filter((p) => !p.merged_into && p.inbox === 'descartada'))
+  const inbound = computed(() => state.inbound)
+  async function setInbox(id: string, inbox: Property['inbox'], reason: string | null = null) {
+    const { error } = await supabase.rpc('set_inbox', { p_id: id, p_inbox: inbox, p_reason: reason })
+    fail(error)
+    const p = state.properties.find((x) => x.id === id)
+    if (p) {
+      p.inbox = inbox
+      p.discard_reason = inbox === 'descartada' ? (reason ?? p.discard_reason) : null
+    }
+  }
+
   // ---------- avisos (Web Push) ----------
   async function loadPushSubscriptions(): Promise<PushSubscriptionRow[]> {
     const { data, error } = await supabase.from('push_subscriptions').select('*')
@@ -390,6 +407,10 @@ export function useData() {
     loadIngestToken,
     createIngestToken,
     deleteIngestToken,
+    inboxItems,
+    autoDiscarded,
+    inbound,
+    setInbox,
     loadPushSubscriptions,
     savePushSubscription,
     removePushSubscription,

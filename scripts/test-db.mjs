@@ -303,6 +303,47 @@ async function fase3() {
   check(hh.length === 0, 'un extraño sigue sin ver la casa creada por enlace')
 }
 
+async function fase4() {
+  console.log('Fase 4 · correo y Bandeja')
+  // La función de Supabase llama a ingest_email con la clave de servicio (aquí: superusuario).
+  await expectError(() => sql(`select ingest_email('malo', '{"message_id":"m1"}', '[]')`), /no válido/, 'ingest_email con código malo')
+  const r1 = (await sql(`select ingest_email('tok-luis-1234567890', $1::jsonb, $2::jsonb) as r`, [
+    JSON.stringify({ message_id: 'msg-1', from: 'alertas@idealista.com', subject: 'Nuevas casas', body: 'texto' }),
+    JSON.stringify([
+      { title: 'Piso en Fuencarral, 3 hab', price: 350000, m2: 95, rooms: 3, lat: 40.5, lng: -3.69, extras: { ascensor: true }, url: 'https://www.idealista.com/inmueble/5001/' },
+      { title: 'Piso caro', price: 700000, m2: 95, rooms: 3, lat: 40.5, lng: -3.69, extras: { ascensor: true } },
+    ]),
+  ])).rows[0].r
+  check(r1.estado === 'done' && r1.casas.length === 2, 'un correo con dos casas crea dos fichas')
+  const bandeja = await as(ANA, async () => (await sql(`select title, inbox, source from properties where id = any($1::uuid[]) order by title`, [r1.casas])).rows)
+  check(bandeja.find((p) => p.title === 'Piso caro').inbox === 'descartada', 'la que incumple cae en Descartadas')
+  check(bandeja.find((p) => p.title !== 'Piso caro').inbox === 'bandeja' && bandeja[0].source === 'correo', 'la que cumple cae en la Bandeja')
+  // El mismo correo otra vez no repite.
+  const r2 = (await sql(`select ingest_email('tok-luis-1234567890', $1::jsonb, $2::jsonb) as r`, [JSON.stringify({ message_id: 'msg-1' }), '[]'])).rows[0].r
+  check(r2.estado === 'repetido', 'un correo repetido no crea nada')
+  // Un correo sin casas queda como ignorado.
+  const r3 = (await sql(`select ingest_email('tok-luis-1234567890', $1::jsonb, '[]'::jsonb) as r`, [JSON.stringify({ message_id: 'msg-2', subject: 'Hola' })])).rows[0].r
+  check(r3.estado === 'ignored', 'un correo sin casas se apunta como ignorado')
+  const correos = await as(ANA, async () => (await sql(`select status from inbound_messages order by created_at`)).rows.map((r) => r.status))
+  check(correos.join(',') === 'done,ignored', 'los dos ven los correos recibidos')
+  const ajenos = await as(OTRO, async () => (await sql(`select count(*)::int as n from inbound_messages`)).rows[0].n)
+  check(ajenos === 0, 'un extraño no ve vuestros correos')
+  // Desde la app no se puede llamar a ingest_email.
+  await as(ANA, () => expectError(() => sql(`select ingest_email('tok-luis-1234567890', '{"message_id":"m9"}', '[]')`), /permission|denied/i, 'la app no puede llamar a ingest_email'))
+
+  // Aceptar y rescatar.
+  const enBandeja = bandeja.find((p) => p.inbox === 'bandeja')
+  const idB = (await sql(`select id from properties where title = $1`, [enBandeja.title])).rows[0].id
+  await as(ANA, () => sql(`select set_inbox($1, 'aceptada')`, [idB]))
+  check((await sql(`select inbox from properties where id = $1`, [idB])).rows[0].inbox === 'aceptada', 'aceptar desde la Bandeja')
+  const idD = (await sql(`select id from properties where title = 'Piso caro'`)).rows[0].id
+  await as(LUIS, () => sql(`select set_inbox($1, 'aceptada')`, [idD]))
+  const resc = (await sql(`select inbox, discard_reason from properties where id = $1`, [idD])).rows[0]
+  check(resc.inbox === 'aceptada' && resc.discard_reason === null, 'rescatar una descartada limpia el motivo')
+  await as(OTRO, () => sql(`select set_inbox($1, 'descartada', 'hack')`, [idB]))
+  check((await sql(`select inbox from properties where id = $1`, [idB])).rows[0].inbox === 'aceptada', 'un extraño no cambia la bandeja')
+}
+
 // ---------- ejecución ----------
 try {
   await setup()
@@ -312,6 +353,7 @@ try {
   await fase1()
   await fase2()
   await fase3()
+  await fase4()
 } catch (e) {
   console.error(e)
   fallos++

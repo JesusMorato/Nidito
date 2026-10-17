@@ -105,9 +105,10 @@ async function saveProperty(input: PropertyInput) {
           Mapa
         </router-link>
         <button type="button" class="fab" aria-label="Añadir casa" @click="editor.openQuick()">+</button>
-        <router-link :to="{ name: 'list' }" :class="{ 'router-link-active': route.name === 'property' }">
+        <router-link :to="{ name: 'list' }" :class="{ 'router-link-active': route.name === 'property' || route.name === 'inbox' }">
           <UiIcon name="list" :size="24" />
           Lista
+          <span v-if="data.inboxItems.value.length" class="nav-dot" :aria-label="`${data.inboxItems.value.length} casas por revisar`">{{ data.inboxItems.value.length > 9 ? '9+' : data.inboxItems.value.length }}</span>
         </router-link>
       </div>
     </nav>

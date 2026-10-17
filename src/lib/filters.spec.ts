@@ -44,6 +44,9 @@ describe('applyFilters', () => {
     expect(applyFilters([A, B], DEFAULT_FILTERS, { a: { vetoed: true } }).map((p) => p.id)).toEqual(['b'])
     expect(applyFilters([A, B], { ...DEFAULT_FILTERS, showOut: true }, { a: { vetoed: true } })).toHaveLength(2)
   })
+  it('esconde lo que está en la Bandeja o descartado automáticamente', () => {
+    expect(applyFilters([casa({ inbox: 'bandeja' }), casa({ inbox: 'descartada' }), casa({ inbox: 'aceptada' })], DEFAULT_FILTERS)).toHaveLength(1)
+  })
   it('esconde las casas fusionadas en otra', () => {
     expect(applyFilters([casa({ merged_into: 'x' })], DEFAULT_FILTERS)).toHaveLength(0)
   })

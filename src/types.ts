@@ -219,3 +219,19 @@ export interface IngestToken {
   token: string
   created_at: string
 }
+
+// ---------- fase 4: correo ----------
+
+export interface InboundMessage {
+  id: string
+  household_id: string
+  user_id: string
+  message_id: string
+  from_addr: string
+  subject: string
+  received_at: string
+  status: 'done' | 'ignored' | 'error'
+  detail: string | null
+  property_ids: string[]
+  created_at: string
+}

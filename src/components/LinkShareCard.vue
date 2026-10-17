@@ -18,6 +18,7 @@ const { confirm } = useConfirm()
 const token = ref<IngestToken | null>(null)
 const loaded = ref(false)
 const endpoint = `${supabaseUrl}/rest/v1/rpc/register_link`
+const mailEndpoint = `${supabaseUrl}/functions/v1/ingest-email`
 
 onMounted(async () => {
   try {
@@ -55,10 +56,11 @@ async function copy(text: string, what: string) {
 
 <template>
   <div class="card">
-    <h2>Compartir enlaces desde el iPhone</h2>
+    <h2>Compartir enlaces y correo automático</h2>
     <p class="tiny" style="margin: 0.3rem 0 0.6rem">
       Desde la app de Idealista o cualquier portal: Compartir → atajo "Nidito". La casa aparece aquí con el enlace y, si el texto lo trae, el precio.
       Después la completas con "Pegar texto" o a mano. Los pasos están en <code>docs/ENLACES.md</code>.
+      El mismo código sirve para el <strong>correo automático</strong> (Gmail → Bandeja), que se monta con <code>docs/CORREO.md</code>.
     </p>
     <template v-if="!loaded"><p class="tiny">Cargando…</p></template>
     <template v-else-if="!token">
@@ -72,6 +74,10 @@ async function copy(text: string, what: string) {
       <div class="field">
         <label>Dirección a la que manda el atajo</label>
         <div class="row"><code class="grow ellipsis">{{ endpoint }}</code><button type="button" class="icon" aria-label="Copiar dirección" @click="copy(endpoint, 'Dirección')"><UiIcon name="copy" /></button></div>
+      </div>
+      <div class="field">
+        <label>Dirección de la función de correo (para el Apps Script)</label>
+        <div class="row"><code class="grow ellipsis">{{ mailEndpoint }}</code><button type="button" class="icon" aria-label="Copiar dirección de correo" @click="copy(mailEndpoint, 'Dirección')"><UiIcon name="copy" /></button></div>
       </div>
       <div class="field">
         <label>Clave pública</label>

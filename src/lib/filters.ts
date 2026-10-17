@@ -72,6 +72,8 @@ export function applyFilters(items: Property[], f: Filters, scores: Record<strin
   const q = norm(f.text.trim())
   return items.filter((p) => {
     if (p.merged_into) return false
+    // Lo que está en la Bandeja o descartado automáticamente vive en su propia pantalla.
+    if (p.inbox && p.inbox !== 'aceptada') return false
     if (f.statuses.length ? !f.statuses.includes(p.status) : !f.showOut && OUT.includes(p.status)) return false
     if (!f.showOut && !f.statuses.length && scores[p.id]?.vetoed) return false
     if (f.priceMin != null && (p.price == null || p.price < f.priceMin)) return false

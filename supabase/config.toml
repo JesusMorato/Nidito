@@ -7,3 +7,8 @@ project_id = ""
 # Solo se puede llamar con una sesión válida: Supabase comprueba el token antes
 # de que la función se ejecute.
 verify_jwt = true
+
+[functions.ingest-email]
+# La llama el Apps Script de Gmail, sin sesión: el código secreto del cuerpo identifica
+# a la persona (lo comprueba ingest_email en la base de datos).
+verify_jwt = false

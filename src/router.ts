@@ -5,6 +5,7 @@ import OnboardingView from './views/OnboardingView.vue'
 import MapView from './views/MapView.vue'
 import ListView from './views/ListView.vue'
 import PropertyView from './views/PropertyView.vue'
+import InboxView from './views/InboxView.vue'
 import SettingsView from './views/SettingsView.vue'
 import NewPasswordView from './views/NewPasswordView.vue'
 
@@ -18,6 +19,7 @@ export const router = createRouter({
     { path: '/mapa', name: 'map', component: MapView },
     { path: '/lista', name: 'list', component: ListView },
     { path: '/casa/:id', name: 'property', component: PropertyView },
+    { path: '/bandeja', name: 'inbox', component: InboxView },
     { path: '/ajustes', name: 'settings', component: SettingsView },
     { path: '/nueva-contrasena', name: 'new-password', component: NewPasswordView, meta: { recovery: true } },
     { path: '/:pathMatch(.*)*', redirect: '/mapa' },

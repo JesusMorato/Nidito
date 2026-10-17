@@ -23,7 +23,7 @@ const hasRatings = computed(() => Object.values(scores.value).some((s) => s.join
 const filterCount = computed(() => activeFilterCount(fs.filters))
 const sortLabel = computed(() => SORT_OPTIONS.find((o) => o.value === fs.sort)?.label ?? '')
 const firstPhoto = (p: Property) => data.photosOf(p.id)[0] ?? null
-const total = computed(() => data.properties.value.filter((p) => !p.merged_into).length)
+const total = computed(() => data.properties.value.filter((p) => !p.merged_into && p.inbox === 'aceptada').length)
 </script>
 
 <template>
@@ -41,6 +41,15 @@ const total = computed(() => data.properties.value.filter((p) => !p.merged_into)
     </div>
 
     <div v-if="data.offline.value" class="offline-bar" style="border-radius: var(--r-md)">Enseñando la última copia guardada; reconectando…</div>
+
+    <router-link :to="{ name: 'inbox' }" class="inbox-banner" :class="{ quiet: !data.inboxItems.value.length }">
+      <UiIcon name="inbox" :size="18" />
+      <span class="grow">
+        <template v-if="data.inboxItems.value.length">{{ data.inboxItems.value.length }} {{ data.inboxItems.value.length === 1 ? 'casa nueva por revisar' : 'casas nuevas por revisar' }}</template>
+        <template v-else>Bandeja: nada por revisar</template>
+      </span>
+      <UiIcon name="chevronRight" :size="16" />
+    </router-link>
 
     <template v-if="visible.length">
       <router-link v-for="p in visible" :key="p.id" :to="{ name: 'property', params: { id: p.id } }" class="pcard-link">
@@ -67,4 +76,6 @@ const total = computed(() => data.properties.value.filter((p) => !p.merged_into)
 .search-box { display: flex; align-items: center; gap: 0.5rem; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0 0.9rem; color: var(--ink-3); }
 .search-box input { border: 0; background: transparent; padding: 0.55rem 0; }
 .search-box input:focus { outline: none; }
+.inbox-banner { display: flex; align-items: center; gap: 0.5rem; text-decoration: none; background: var(--casa-soft); color: var(--casa-ink); font-weight: 600; font-size: 0.9rem; border-radius: var(--r-md); padding: 0.55rem 0.8rem; }
+.inbox-banner.quiet { background: transparent; color: var(--ink-3); font-weight: 500; border: 1px dashed var(--line); }
 </style>

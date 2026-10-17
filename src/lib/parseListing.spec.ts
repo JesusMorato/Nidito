@@ -87,3 +87,17 @@ describe('parseListing', () => {
     expect(parseListing('sale por 399k €').price).toBe(399000)
   })
 })
+
+// La función de Supabase lleva una copia del lector (Deno no importa fuera de su carpeta).
+// Si alguien cambia uno y no el otro, este test lo dice.
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+describe('copia del lector en supabase/functions/ingest-email', () => {
+  it('es idéntica a src/lib/parseListing.ts (salvo la cabecera y la ruta de tipos)', () => {
+    const src = readFileSync(resolve(__dirname, 'parseListing.ts'), 'utf8')
+    const copy = readFileSync(resolve(__dirname, '../../supabase/functions/ingest-email/parseListing.ts'), 'utf8')
+      .split('\n').slice(3).join('\n')
+      .replace("from './types.ts'", "from '../types'")
+    expect(copy).toBe(src)
+  })
+})
