@@ -17,6 +17,7 @@ import { pinIcon } from '../lib/mapPins'
 import StatusChip from '../components/StatusChip.vue'
 import StatusPicker from '../components/StatusPicker.vue'
 import PhotoStrip from '../components/PhotoStrip.vue'
+import RatingsPanel from '../components/RatingsPanel.vue'
 import UiIcon from '../components/UiIcon.vue'
 
 const route = useRoute()
@@ -152,7 +153,7 @@ async function remove() {
       <PhotoStrip :photos="photos" :url-of="data.photoUrl" :busy="uploading" style="margin-top: 0.6rem" @add="addPhotos" @remove="removePhoto" @open="viewing = $event" />
     </div>
 
-    <slot name="ratings" />
+    <RatingsPanel :property="p" />
 
     <div v-if="p.lat != null" class="card" style="padding: 0; overflow: hidden">
       <div ref="mapEl" class="prop-map" />

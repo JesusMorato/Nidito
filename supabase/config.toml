@@ -1,0 +1,9 @@
+# Identificador del proyecto de Supabase (es público: sale en la URL de la API).
+# Lo usa la CLI para saber dónde publicar las funciones de supabase/functions/.
+# El workflow funciones.yml lo saca de .env, así que aquí solo es informativo.
+project_id = ""
+
+[functions.notify-partner]
+# Solo se puede llamar con una sesión válida: Supabase comprueba el token antes
+# de que la función se ejecute.
+verify_jwt = true

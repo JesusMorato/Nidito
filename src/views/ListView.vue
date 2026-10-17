@@ -6,6 +6,7 @@ import { useFilters } from '../composables/useFilters'
 import { useVisible } from '../composables/useVisible'
 import { SORT_OPTIONS, activeFilterCount } from '../lib/filters'
 import type { Property } from '../types'
+import { formatScore } from '../lib/ratings'
 import PropertyCard from '../components/PropertyCard.vue'
 import FilterSheet from '../components/FilterSheet.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -45,7 +46,7 @@ const total = computed(() => data.properties.value.filter((p) => !p.merged_into)
       <router-link v-for="p in visible" :key="p.id" :to="{ name: 'property', params: { id: p.id } }" class="pcard-link">
         <PropertyCard :property="p" :photo="firstPhoto(p)" :photo-url="firstPhoto(p) ? data.photoUrl(firstPhoto(p)!) : ''" :prices="data.pricesOf(p.id)">
           <template #tags>
-            <span v-if="scores[p.id]?.joint != null" class="tag">★ {{ scores[p.id].joint!.toFixed(1) }}</span>
+            <span v-if="scores[p.id]?.joint != null" class="tag">★ {{ formatScore(scores[p.id].joint) }}</span>
             <span v-if="(scores[p.id]?.disagreement ?? 0) >= 2" class="tag warn">Desacuerdo</span>
           </template>
         </PropertyCard>

@@ -56,6 +56,8 @@ export interface PropertyScores {
   mine?: number | null
   disagreement?: number | null
   ratedByMe?: boolean
+  /** Alguno de los dos ha puesto veto: sale de la lista principal. */
+  vetoed?: boolean
   metroMinutes?: number | null
 }
 
@@ -70,6 +72,7 @@ export function applyFilters(items: Property[], f: Filters, scores: Record<strin
   return items.filter((p) => {
     if (p.merged_into) return false
     if (f.statuses.length ? !f.statuses.includes(p.status) : !f.showOut && OUT.includes(p.status)) return false
+    if (!f.showOut && !f.statuses.length && scores[p.id]?.vetoed) return false
     if (f.priceMin != null && (p.price == null || p.price < f.priceMin)) return false
     if (f.priceMax != null && (p.price == null || p.price > f.priceMax)) return false
     if (f.m2Min != null && (p.m2 == null || p.m2 < f.m2Min)) return false

@@ -3,7 +3,7 @@
 // llaman a Supabase directamente. Las casas se guardan SIEMPRE con save_property.
 import { computed, reactive, ref } from 'vue'
 import { supabase } from '../supabase'
-import type { Photo, PriceEntry, Property, PropertyInput, PropertyStatus } from '../types'
+import type { Aspect, Comment, Photo, PriceEntry, Property, PropertyInput, PropertyStatus, PushSubscriptionRow, Rating, Reaction } from '../types'
 import { isNetworkError, loadSnapshot, saveSnapshot } from '../lib/offline'
 import { resizeImage } from '../lib/resizeImage'
 
@@ -14,13 +14,19 @@ interface State {
   properties: Property[]
   photos: Photo[]
   prices: PriceEntry[]
+  aspects: Aspect[]
+  ratings: Rating[]
+  reactions: Reaction[]
+  comments: Comment[]
 }
 
-const state = reactive<State>({ loadedFor: null, loadedAt: 0, loading: false, properties: [], photos: [], prices: [] })
+const state = reactive<State>({ loadedFor: null, loadedAt: 0, loading: false, properties: [], photos: [], prices: [], aspects: [], ratings: [], reactions: [], comments: [] })
 /** true mientras enseñamos la copia local porque el servidor no responde. */
 const offline = ref(false)
 /** URLs firmadas de las fotos (el cubo es privado), por ruta. Caducan en una hora. */
 const photoUrls = reactive<Record<string, string>>({})
+
+type Snapshot = Pick<State, 'properties' | 'photos' | 'prices' | 'aspects' | 'ratings' | 'reactions' | 'comments'>
 
 function normalise(p: Record<string, unknown>): Property {
   return {
@@ -33,20 +39,29 @@ function normalise(p: Record<string, unknown>): Property {
 }
 
 async function fetchAll(hid: string) {
-  const [pr, ph, pc] = await Promise.all([
+  const [pr, ph, pc, as, ra, re, co] = await Promise.all([
     supabase.from('properties').select('*').order('created_at', { ascending: false }),
     supabase.from('photos').select('*').order('created_at', { ascending: true }),
     supabase.from('price_history').select('*').order('seen_at', { ascending: true }),
+    supabase.from('rating_aspects').select('*').order('sort_order', { ascending: true }),
+    supabase.from('ratings').select('*'),
+    supabase.from('property_reactions').select('*'),
+    supabase.from('comments').select('*').order('created_at', { ascending: true }),
   ])
-  const err = pr.error ?? ph.error ?? pc.error
+  const err = pr.error ?? ph.error ?? pc.error ?? as.error ?? ra.error ?? re.error ?? co.error
   if (err) throw new Error(err.message)
   state.properties = (pr.data ?? []).map((r) => normalise(r as Record<string, unknown>))
   state.photos = (ph.data ?? []) as Photo[]
   state.prices = (pc.data ?? []).map((r) => ({ ...(r as PriceEntry), price: Number((r as PriceEntry).price) }))
+  state.aspects = (as.data ?? []) as Aspect[]
+  state.ratings = (ra.data ?? []).map((r) => ({ ...(r as Rating), stars: Number((r as Rating).stars) }))
+  state.reactions = (re.data ?? []) as Reaction[]
+  state.comments = (co.data ?? []) as Comment[]
   state.loadedFor = hid
   state.loadedAt = Date.now()
   offline.value = false
-  saveSnapshot(`datos:${hid}`, { properties: state.properties, photos: state.photos, prices: state.prices })
+  const snap: Snapshot = { properties: state.properties, photos: state.photos, prices: state.prices, aspects: state.aspects, ratings: state.ratings, reactions: state.reactions, comments: state.comments }
+  saveSnapshot(`datos:${hid}`, snap)
 }
 
 async function load(hid: string) {
@@ -55,11 +70,9 @@ async function load(hid: string) {
   try {
     await fetchAll(hid)
   } catch (e) {
-    const copy = loadSnapshot<{ properties: Property[]; photos: Photo[]; prices: PriceEntry[] }>(`datos:${hid}`)
+    const copy = loadSnapshot<Snapshot>(`datos:${hid}`)
     if (isNetworkError(e) && copy) {
-      state.properties = copy.value.properties
-      state.photos = copy.value.photos
-      state.prices = copy.value.prices
+      Object.assign(state, copy.value)
       state.loadedFor = hid
       offline.value = true
     } else {
@@ -68,6 +81,10 @@ async function load(hid: string) {
   } finally {
     state.loading = false
   }
+}
+
+function fail(error: { message: string } | null) {
+  if (error) throw new Error(error.message)
 }
 
 export function useData() {
@@ -89,20 +106,27 @@ export function useData() {
 
   const properties = computed(() => state.properties)
   const byId = computed(() => Object.fromEntries(state.properties.map((p) => [p.id, p])) as Record<string, Property>)
+  const aspects = computed(() => state.aspects)
+  const activeAspects = computed(() => state.aspects.filter((a) => a.active))
+  const ratings = computed(() => state.ratings)
   const photosOf = (propertyId: string) => state.photos.filter((f) => f.property_id === propertyId)
   const pricesOf = (propertyId: string) => state.prices.filter((e) => e.property_id === propertyId)
+  const ratingsOf = (propertyId: string) => state.ratings.filter((r) => r.property_id === propertyId)
+  const reactionsOf = (propertyId: string) => state.reactions.filter((r) => r.property_id === propertyId)
+  const commentsOf = (propertyId: string) => state.comments.filter((c) => c.property_id === propertyId)
 
+  // ---------- casas ----------
   /** Crea o actualiza una casa. Devuelve su id. */
   async function saveProperty(input: PropertyInput): Promise<string> {
     const { data, error } = await supabase.rpc('save_property', { p: input })
-    if (error) throw new Error(error.message)
+    fail(error)
     await refresh()
     return data as string
   }
 
   async function setStatus(id: string, status: PropertyStatus) {
     const { error } = await supabase.rpc('set_property_status', { p_id: id, p_status: status })
-    if (error) throw new Error(error.message)
+    fail(error)
     const p = state.properties.find((x) => x.id === id)
     if (p) p.status = status
   }
@@ -112,29 +136,32 @@ export function useData() {
     const paths = photosOf(id).map((f) => f.path)
     if (paths.length) await supabase.storage.from('fotos').remove(paths)
     const { error } = await supabase.from('properties').delete().eq('id', id)
-    if (error) throw new Error(error.message)
+    fail(error)
     state.properties = state.properties.filter((p) => p.id !== id)
     state.photos = state.photos.filter((f) => f.property_id !== id)
+    state.ratings = state.ratings.filter((r) => r.property_id !== id)
+    state.comments = state.comments.filter((c) => c.property_id !== id)
   }
 
+  // ---------- fotos ----------
   async function uploadPhoto(property: Property, file: File, userId: string) {
     const blob = await resizeImage(file)
     const path = `${property.household_id}/${property.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
     const up = await supabase.storage.from('fotos').upload(path, blob, { contentType: 'image/jpeg', upsert: false })
-    if (up.error) throw new Error(up.error.message)
+    fail(up.error)
     const { data, error } = await supabase
       .from('photos')
       .insert({ household_id: property.household_id, property_id: property.id, path, created_by: userId })
       .select('*')
       .single()
-    if (error) throw new Error(error.message)
+    fail(error)
     state.photos.push(data as Photo)
   }
 
   async function deletePhoto(photo: Photo) {
     await supabase.storage.from('fotos').remove([photo.path])
     const { error } = await supabase.from('photos').delete().eq('id', photo.id)
-    if (error) throw new Error(error.message)
+    fail(error)
     state.photos = state.photos.filter((f) => f.id !== photo.id)
   }
 
@@ -147,13 +174,127 @@ export function useData() {
     return ''
   }
 
+  // ---------- valoraciones ----------
+  /** Guarda mis estrellas de un aspecto. Devuelve true si es mi primera valoración de esa casa. */
+  async function rate(propertyId: string, aspectId: string, userId: string, stars: number, comment: string | null): Promise<boolean> {
+    const first = !state.ratings.some((r) => r.property_id === propertyId && r.user_id === userId)
+    const row = { property_id: propertyId, user_id: userId, aspect_id: aspectId, stars, comment: comment?.trim() || null, updated_at: new Date().toISOString() }
+    const { error } = await supabase.from('ratings').upsert(row, { onConflict: 'property_id,user_id,aspect_id' })
+    fail(error)
+    const i = state.ratings.findIndex((r) => r.property_id === propertyId && r.user_id === userId && r.aspect_id === aspectId)
+    if (i >= 0) state.ratings[i] = row
+    else state.ratings.push(row)
+    // Si es la primera, puede que ahora ya pueda ver las de mi pareja (modo a ciegas).
+    if (first) await refreshRatings()
+    return first
+  }
+
+  async function unrate(propertyId: string, aspectId: string, userId: string) {
+    const { error } = await supabase.from('ratings').delete().match({ property_id: propertyId, user_id: userId, aspect_id: aspectId })
+    fail(error)
+    state.ratings = state.ratings.filter((r) => !(r.property_id === propertyId && r.user_id === userId && r.aspect_id === aspectId))
+  }
+
+  async function refreshRatings() {
+    const { data, error } = await supabase.from('ratings').select('*')
+    if (!error && data) state.ratings = data.map((r) => ({ ...(r as Rating), stars: Number((r as Rating).stars) }))
+  }
+
+  async function setReaction(propertyId: string, userId: string, patch: Partial<Pick<Reaction, 'veto' | 'veto_reason' | 'comment'>>) {
+    const existing = state.reactions.find((r) => r.property_id === propertyId && r.user_id === userId)
+    const row: Reaction = { property_id: propertyId, user_id: userId, veto: false, veto_reason: null, comment: null, ...existing, ...patch, updated_at: new Date().toISOString() }
+    const { error } = await supabase.from('property_reactions').upsert(row, { onConflict: 'property_id,user_id' })
+    fail(error)
+    const i = state.reactions.findIndex((r) => r.property_id === propertyId && r.user_id === userId)
+    if (i >= 0) state.reactions[i] = row
+    else state.reactions.push(row)
+  }
+
+  async function addComment(propertyId: string, userId: string, body: string): Promise<Comment> {
+    const { data, error } = await supabase.from('comments').insert({ property_id: propertyId, user_id: userId, body: body.trim() }).select('*').single()
+    fail(error)
+    state.comments.push(data as Comment)
+    return data as Comment
+  }
+
+  async function deleteComment(id: string) {
+    const { error } = await supabase.from('comments').delete().eq('id', id)
+    fail(error)
+    state.comments = state.comments.filter((c) => c.id !== id)
+  }
+
+  // ---------- aspectos ----------
+  async function addAspect(householdId: string, name: string) {
+    const sort = Math.max(0, ...state.aspects.map((a) => a.sort_order)) + 1
+    const { data, error } = await supabase.from('rating_aspects').insert({ household_id: householdId, name: name.trim(), sort_order: sort }).select('*').single()
+    fail(error)
+    state.aspects.push(data as Aspect)
+  }
+  async function updateAspect(id: string, patch: Partial<Pick<Aspect, 'name' | 'active' | 'sort_order'>>) {
+    const { error } = await supabase.from('rating_aspects').update(patch).eq('id', id)
+    fail(error)
+    const a = state.aspects.find((x) => x.id === id)
+    if (a) Object.assign(a, patch)
+    state.aspects.sort((x, y) => x.sort_order - y.sort_order)
+  }
+  async function deleteAspect(id: string) {
+    const { error } = await supabase.from('rating_aspects').delete().eq('id', id)
+    fail(error)
+    state.aspects = state.aspects.filter((a) => a.id !== id)
+    state.ratings = state.ratings.filter((r) => r.aspect_id !== id)
+  }
+  async function moveAspect(id: string, dir: -1 | 1) {
+    const list = [...state.aspects].sort((x, y) => x.sort_order - y.sort_order)
+    const i = list.findIndex((a) => a.id === id)
+    const j = i + dir
+    if (i < 0 || j < 0 || j >= list.length) return
+    const a = list[i], b = list[j]
+    await Promise.all([updateAspect(a.id, { sort_order: b.sort_order }), updateAspect(b.id, { sort_order: a.sort_order })])
+  }
+
+  async function setBlindRating(householdId: string, on: boolean) {
+    const { error } = await supabase.from('households').update({ blind_rating: on }).eq('id', householdId)
+    fail(error)
+    await refreshRatings()
+  }
+
+  // ---------- avisos (Web Push) ----------
+  async function loadPushSubscriptions(): Promise<PushSubscriptionRow[]> {
+    const { data, error } = await supabase.from('push_subscriptions').select('*')
+    fail(error)
+    return (data ?? []) as PushSubscriptionRow[]
+  }
+  async function savePushSubscription(row: PushSubscriptionRow) {
+    const { error } = await supabase.from('push_subscriptions').upsert(row, { onConflict: 'endpoint' })
+    fail(error)
+  }
+  async function removePushSubscription(endpoint: string) {
+    const { error } = await supabase.from('push_subscriptions').delete().eq('endpoint', endpoint)
+    fail(error)
+  }
+  /** Avisa a la pareja. Va por detrás: si falla, no pasa nada. */
+  function notifyPartner(kind: 'casa' | 'valoracion' | 'comentario' | 'precio', propertyId: string, extra: Record<string, unknown> = {}) {
+    supabase.functions.invoke('notify-partner', { body: { kind, property_id: propertyId, ...extra } }).catch(() => {})
+  }
+  async function testPush(): Promise<unknown> {
+    const { data, error } = await supabase.functions.invoke('notify-partner', { body: { prueba: true } })
+    fail(error)
+    return data
+  }
+
   return {
     state,
     offline,
     properties,
     byId,
+    aspects,
+    activeAspects,
+    ratings,
     photosOf,
     pricesOf,
+    ratingsOf,
+    reactionsOf,
+    commentsOf,
     ensureLoaded,
     refreshIfStale,
     refresh,
@@ -163,5 +304,20 @@ export function useData() {
     uploadPhoto,
     deletePhoto,
     photoUrl,
+    rate,
+    unrate,
+    setReaction,
+    addComment,
+    deleteComment,
+    addAspect,
+    updateAspect,
+    deleteAspect,
+    moveAspect,
+    setBlindRating,
+    loadPushSubscriptions,
+    savePushSubscription,
+    removePushSubscription,
+    notifyPartner,
+    testPush,
   }
 }

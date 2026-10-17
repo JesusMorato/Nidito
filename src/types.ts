@@ -1,6 +1,7 @@
 // Tipos que reflejan las tablas de Supabase (ver docs/MODELO-DATOS.md).
 
 export interface Household {
+  blind_rating?: boolean
   id: string
   name: string
   invite_code: string
@@ -123,4 +124,51 @@ export interface Photo {
   path: string
   created_by: string
   created_at: string
+}
+
+// ---------- fase 2: valoraciones ----------
+
+export interface Aspect {
+  id: string
+  household_id: string
+  name: string
+  sort_order: number
+  active: boolean
+  created_at: string
+}
+
+export interface Rating {
+  property_id: string
+  user_id: string
+  aspect_id: string
+  stars: number
+  comment: string | null
+  updated_at: string
+}
+
+export interface Reaction {
+  property_id: string
+  user_id: string
+  veto: boolean
+  veto_reason: string | null
+  comment: string | null
+  updated_at: string
+}
+
+export interface Comment {
+  id: string
+  property_id: string
+  user_id: string
+  body: string
+  created_at: string
+}
+
+export interface PushSubscriptionRow {
+  id?: string
+  user_id: string
+  household_id: string
+  endpoint: string
+  p256dh: string
+  auth: string
+  aparato: string
 }

@@ -17,6 +17,7 @@ import { STATUS_COLOR, scoreColor } from '../lib/status'
 import { pinIcon, clusterIcon } from '../lib/mapPins'
 import { activeFilterCount } from '../lib/filters'
 import type { Property } from '../types'
+import { formatScore } from '../lib/ratings'
 import PropertyCard from '../components/PropertyCard.vue'
 import FilterSheet from '../components/FilterSheet.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -147,7 +148,7 @@ const firstPhoto = (p: Property) => data.photosOf(p.id)[0] ?? null
       <div v-if="selected" class="map-card" @click="openSelected">
         <PropertyCard :property="selected" :photo="firstPhoto(selected)" :photo-url="firstPhoto(selected) ? data.photoUrl(firstPhoto(selected)!) : ''" :prices="data.pricesOf(selected.id)" compact>
           <template #tags>
-            <span v-if="scores[selected.id]?.joint != null" class="tag">★ {{ scores[selected.id].joint!.toFixed(1) }}</span>
+            <span v-if="scores[selected.id]?.joint != null" class="tag">★ {{ formatScore(scores[selected.id].joint) }}</span>
           </template>
         </PropertyCard>
       </div>

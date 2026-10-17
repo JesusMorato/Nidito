@@ -90,3 +90,44 @@ self.addEventListener('fetch', (event) => {
     )
   }
 })
+
+// ---------- avisos (Web Push) ----------
+// El aviso lo manda la función notify-partner de Supabase. Aquí solo se enseña.
+self.addEventListener('push', (event) => {
+  let d = {}
+  try {
+    d = event.data ? event.data.json() : {}
+  } catch {
+    d = { cuerpo: event.data ? event.data.text() : '' }
+  }
+  const titulo = d.titulo || 'Nidito'
+  event.waitUntil(
+    self.registration.showNotification(titulo, {
+      body: d.cuerpo || '',
+      icon: `${SCOPE}icons/icon-192.png`,
+      badge: `${SCOPE}icons/icon-192.png`,
+      // Con etiqueta, un aviso de la misma casa sustituye al anterior en vez de apilarse.
+      tag: d.etiqueta || 'nidito',
+      data: { url: `${SCOPE}${d.hash || ''}` },
+    }),
+  )
+})
+
+// Al tocar el aviso: si la app ya está abierta, se trae al frente; si no, se abre.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const destino = (event.notification.data && event.notification.data.url) || SCOPE
+  event.waitUntil(
+    (async () => {
+      const abiertas = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      for (const c of abiertas) {
+        if (c.url.startsWith(SCOPE)) {
+          await c.focus()
+          if ('navigate' in c) await c.navigate(destino).catch(() => {})
+          return
+        }
+      }
+      await self.clients.openWindow(destino)
+    })(),
+  )
+})

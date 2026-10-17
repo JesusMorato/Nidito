@@ -171,6 +171,60 @@ async function fase1() {
     /policy|permission|denied/i, 'no se puede subir una foto a nombre de otro'))
 }
 
+async function fase2() {
+  console.log('Fase 2 · valoraciones')
+  const aspects = await as(ANA, async () => (await sql(`select id, name from rating_aspects order by sort_order`)).rows)
+  check(aspects.length === 10 && aspects[0].name === 'Ubicación y barrio', 'el hogar tiene los 10 aspectos de serie')
+  const luz = aspects.find((a) => a.name === 'Luz').id
+  const estado = aspects.find((a) => a.name === 'Estado').id
+  const ajenos = await as(OTRO, async () => (await sql(`select count(*)::int as n from rating_aspects`)).rows[0].n)
+  check(ajenos === 0, 'un extraño no ve los aspectos')
+
+  // Ana puntúa dos aspectos.
+  await as(ANA, () => sql(`insert into ratings (property_id, user_id, aspect_id, stars, comment) values ($1, $2, $3, 5, 'Mucha luz'), ($1, $2, $4, 3, null)`, [ctx.casa, ANA, luz, estado]))
+  // Luis no puede puntuar en nombre de Ana.
+  await as(LUIS, () => expectError(() => sql(`insert into ratings (property_id, user_id, aspect_id, stars) values ($1, $2, $3, 1)`, [ctx.casa, ANA, luz]), /policy|permission|denied/i, 'Luis no puntúa como Ana'))
+
+  // A ciegas (por defecto): Luis no ve las de Ana hasta puntuar.
+  let ve = await as(LUIS, async () => (await sql(`select count(*)::int as n from ratings where user_id = $1`, [ANA])).rows[0].n)
+  check(ve === 0, 'a ciegas: Luis no ve las estrellas de Ana')
+  await as(LUIS, () => sql(`insert into ratings (property_id, user_id, aspect_id, stars) values ($1, $2, $3, 2)`, [ctx.casa, LUIS, luz]))
+  ve = await as(LUIS, async () => (await sql(`select count(*)::int as n from ratings where user_id = $1`, [ANA])).rows[0].n)
+  check(ve === 2, 'tras puntuar un aspecto, Luis ve las de Ana')
+  const anaVe = await as(ANA, async () => (await sql(`select stars from ratings where user_id = $1`, [LUIS])).rows)
+  check(anaVe.length === 1 && anaVe[0].stars === 2, 'Ana ve la de Luis')
+
+  // Otra casa: Luis sigue a ciegas en esa.
+  const casa2 = await as(ANA, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Segunda casa', price: 200000 })])).rows[0].id)
+  await as(ANA, () => sql(`insert into ratings (property_id, user_id, aspect_id, stars) values ($1, $2, $3, 4)`, [casa2, ANA, luz]))
+  ve = await as(LUIS, async () => (await sql(`select count(*)::int as n from ratings where property_id = $1`, [casa2])).rows[0].n)
+  check(ve === 0, 'la ceguera es por casa')
+  // Apagar el modo a ciegas: se ve todo.
+  await as(LUIS, () => sql(`update households set blind_rating = false`))
+  ve = await as(LUIS, async () => (await sql(`select count(*)::int as n from ratings where property_id = $1`, [casa2])).rows[0].n)
+  check(ve === 1, 'sin modo a ciegas, Luis ve todo')
+  await as(LUIS, () => sql(`update households set blind_rating = true`))
+
+  // Un extraño no ve nada aunque conozca los ids.
+  const extr = await as(OTRO, async () => (await sql(`select count(*)::int as n from ratings`)).rows[0].n)
+  check(extr === 0, 'un extraño no ve valoraciones')
+
+  // Veto y comentarios.
+  await as(LUIS, () => sql(`insert into property_reactions (property_id, user_id, veto, veto_reason) values ($1, $2, true, 'Demasiado lejos')`, [ctx.casa, LUIS]))
+  const veto = await as(ANA, async () => (await sql(`select veto, veto_reason from property_reactions where property_id = $1 and user_id = $2`, [ctx.casa, LUIS])).rows[0])
+  check(veto?.veto === true && veto.veto_reason === 'Demasiado lejos', 'Ana ve el veto de Luis')
+  await as(ANA, () => expectError(() => sql(`update property_reactions set veto = false where user_id = $1 returning 1`, [LUIS]).then((r) => { if (r.rows.length === 0) throw new Error('policy: 0 filas') }), /policy/, 'Ana no quita el veto de Luis'))
+  await as(ANA, () => sql(`insert into comments (property_id, user_id, body) values ($1, $2, '¿Vamos a verla el sábado?')`, [ctx.casa, ANA]))
+  const coms = await as(LUIS, async () => (await sql(`select body from comments where property_id = $1`, [ctx.casa])).rows)
+  check(coms.length === 1 && coms[0].body.includes('sábado'), 'Luis lee el comentario de Ana')
+  await as(ANA, () => expectError(() => sql(`insert into comments (property_id, user_id, body) values ($1, $2, '   ')`, [ctx.casa, ANA]), /check|violates/i, 'comentario vacío rechazado'))
+
+  // Avisos: cada uno solo ve sus aparatos.
+  await as(ANA, () => sql(`insert into push_subscriptions (user_id, household_id, endpoint, p256dh, auth, aparato) values ($1, $2, 'https://push/a', 'k', 'a', 'iPhone')`, [ANA, ctx.hid]))
+  const subs = await as(LUIS, async () => (await sql(`select count(*)::int as n from push_subscriptions`)).rows[0].n)
+  check(subs === 0, 'Luis no ve los aparatos de Ana')
+}
+
 // ---------- ejecución ----------
 try {
   await setup()
@@ -178,6 +232,7 @@ try {
   await applyMigrations()
   await fase0()
   await fase1()
+  await fase2()
 } catch (e) {
   console.error(e)
   fallos++

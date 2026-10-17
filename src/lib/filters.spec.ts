@@ -39,6 +39,10 @@ describe('applyFilters', () => {
     const r = applyFilters([A, B], { ...DEFAULT_FILTERS, unratedByMe: true }, { a: { ratedByMe: true } })
     expect(r.map((p) => p.id)).toEqual(['b'])
   })
+  it('esconde las vetadas salvo que se enseñen las que están fuera', () => {
+    expect(applyFilters([A, B], DEFAULT_FILTERS, { a: { vetoed: true } }).map((p) => p.id)).toEqual(['b'])
+    expect(applyFilters([A, B], { ...DEFAULT_FILTERS, showOut: true }, { a: { vetoed: true } })).toHaveLength(2)
+  })
   it('esconde las casas fusionadas en otra', () => {
     expect(applyFilters([casa({ merged_into: 'x' })], DEFAULT_FILTERS)).toHaveLength(0)
   })

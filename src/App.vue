@@ -55,7 +55,10 @@ async function saveProperty(input: PropertyInput) {
     editor.state.saving = false
     editor.close()
     toast(editing ? 'Casa actualizada' : 'Casa guardada')
-    if (!editing) router.push({ name: 'property', params: { id } })
+    if (!editing) {
+      data.notifyPartner('casa', id)
+      router.push({ name: 'property', params: { id } })
+    }
   } catch (e) {
     editor.state.saving = false
     toast(`No se ha podido guardar: ${(e as Error).message}`)
