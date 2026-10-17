@@ -25,6 +25,7 @@ import UiIcon from '../components/UiIcon.vue'
 import Sheet from '../components/Sheet.vue'
 import { useConfirm } from '../composables/useConfirm'
 import type { Zone } from '../types'
+import ZoneNotes from '../components/ZoneNotes.vue'
 
 const router = useRouter()
 const { state: session, partner } = useSession()
@@ -73,6 +74,7 @@ let drawLayer: L.LayerGroup | null = null
 const zoneNameOpen = ref(false)
 const zoneName = ref('')
 const zonesOpen = ref(false)
+const notesFor = ref<string | null>(null)
 
 function drawZones() {
   if (!map || !zoneLayer) return
@@ -254,9 +256,13 @@ const firstPhoto = (p: Property) => data.photosOf(p.id)[0] ?? null
     <Sheet v-if="zonesOpen" title="Vuestras zonas" @close="zonesOpen = false">
       <p class="muted">Dibuja en el mapa los barrios o radios donde buscáis. Sirven para el encaje (si en Criterios exigís estar dentro) y se ven como capa.</p>
       <ul v-if="data.zones.value.length" class="list">
-        <li v-for="z in data.zones.value" :key="z.id">
-          <span class="zone-dot" :style="{ background: z.color }" /><span class="grow">{{ z.name }}</span>
-          <button type="button" class="icon" aria-label="Borrar zona" @click="removeZone(z)"><UiIcon name="trash" :size="18" /></button>
+        <li v-for="z in data.zones.value" :key="z.id" style="display: block">
+          <div class="row">
+            <span class="zone-dot" :style="{ background: z.color }" /><span class="grow" style="font-weight: 600">{{ z.name }}</span>
+            <button type="button" class="icon" aria-label="Notas" @click="notesFor = notesFor === z.id ? null : z.id"><UiIcon name="pencil" :size="18" /></button>
+            <button type="button" class="icon" aria-label="Borrar zona" @click="removeZone(z)"><UiIcon name="trash" :size="18" /></button>
+          </div>
+          <ZoneNotes v-if="notesFor === z.id" :zone="z" compact style="margin: 0.3rem 0 0.5rem 1.2rem" />
         </li>
       </ul>
       <p v-else class="tiny">Todavía no hay zonas.</p>

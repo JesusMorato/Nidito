@@ -11,6 +11,11 @@ import UiIcon from '../components/UiIcon.vue'
 import Sheet from '../components/Sheet.vue'
 import CriteriaCard from '../components/CriteriaCard.vue'
 import LinkShareCard from '../components/LinkShareCard.vue'
+import FinanceCard from '../components/FinanceCard.vue'
+import PlacesCard from '../components/PlacesCard.vue'
+import { shareOrDownload, toCsv } from '../lib/csv'
+import { summariseAll } from '../lib/ratings'
+import { todayIso } from '../lib/format'
 
 const router = useRouter()
 const { state, me, partner, signOut, renameHousehold, renameMe, refresh } = useSession()
@@ -99,6 +104,13 @@ async function testPush() {
   }
 }
 
+function exportCsv() {
+  const myId = state.user?.id ?? ''
+  const sums = summariseAll(data.ratings.value, data.aspects.value, myId, partner.value?.user_id ?? null)
+  const items = data.properties.value.filter((p) => !p.merged_into)
+  shareOrDownload(`nidito-${todayIso()}.csv`, toCsv(items, sums))
+}
+
 async function logout() {
   if (await confirm({ title: 'Cerrar sesión', message: '¿Salir de Nidito en este aparato?', confirmLabel: 'Salir', danger: false })) {
     await signOut()
@@ -173,6 +185,10 @@ async function logout() {
       </label>
     </div>
 
+    <FinanceCard />
+
+    <PlacesCard />
+
     <LinkShareCard />
 
     <div class="card">
@@ -197,6 +213,12 @@ async function logout() {
         <p v-if="push.estado.error" class="error">{{ push.estado.error }}</p>
       </template>
       <p v-else class="tiny">{{ push.situacion.value.texto }}</p>
+    </div>
+
+    <div class="card">
+      <h2>Vuestros datos</h2>
+      <p class="tiny" style="margin: 0.3rem 0 0.6rem">Todas las casas (también bandeja y descartadas) con notas y encaje, en un CSV que abre Excel.</p>
+      <button type="button" class="secondary" @click="exportCsv"><UiIcon name="arrowOut" :size="16" /> Exportar CSV</button>
     </div>
 
     <div class="row" style="justify-content: flex-end; margin-top: 0.5rem">

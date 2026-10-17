@@ -3,7 +3,7 @@
 // llaman a Supabase directamente. Las casas se guardan SIEMPRE con save_property.
 import { computed, reactive, ref } from 'vue'
 import { supabase } from '../supabase'
-import type { Aspect, Comment, Criteria, InboundMessage, IngestToken, Photo, PriceEntry, Property, PropertyInput, PropertyStatus, PushSubscriptionRow, Rating, Reaction, Zone } from '../types'
+import type { Aspect, Comment, ContactEntry, Criteria, InboundMessage, IngestToken, Photo, Place, Visit, ZoneNote, PriceEntry, Property, PropertyInput, PropertyStatus, PushSubscriptionRow, Rating, Reaction, Zone } from '../types'
 import { isNetworkError, loadSnapshot, saveSnapshot } from '../lib/offline'
 import { resizeImage } from '../lib/resizeImage'
 
@@ -21,9 +21,13 @@ interface State {
   criteria: Criteria | null
   zones: Zone[]
   inbound: InboundMessage[]
+  places: Place[]
+  visits: Visit[]
+  contacts: ContactEntry[]
+  zoneNotes: ZoneNote[]
 }
 
-const state = reactive<State>({ loadedFor: null, loadedAt: 0, loading: false, properties: [], photos: [], prices: [], aspects: [], ratings: [], reactions: [], comments: [], criteria: null, zones: [], inbound: [] })
+const state = reactive<State>({ loadedFor: null, loadedAt: 0, loading: false, properties: [], photos: [], prices: [], aspects: [], ratings: [], reactions: [], comments: [], criteria: null, zones: [], inbound: [], places: [], visits: [], contacts: [], zoneNotes: [] })
 /** true mientras enseñamos la copia local porque el servidor no responde. */
 const offline = ref(false)
 /** URLs firmadas de las fotos (el cubo es privado), por ruta. Caducan en una hora. */
@@ -42,7 +46,7 @@ function normalise(p: Record<string, unknown>): Property {
 }
 
 async function fetchAll(hid: string) {
-  const [pr, ph, pc, as, ra, re, co, cr, zo, im] = await Promise.all([
+  const [pr, ph, pc, as, ra, re, co, cr, zo, im, pl, vi, cl, zn] = await Promise.all([
     supabase.from('properties').select('*').order('created_at', { ascending: false }),
     supabase.from('photos').select('*').order('created_at', { ascending: true }),
     supabase.from('price_history').select('*').order('seen_at', { ascending: true }),
@@ -53,8 +57,12 @@ async function fetchAll(hid: string) {
     supabase.from('criteria').select('*').maybeSingle(),
     supabase.from('zones').select('*').order('created_at', { ascending: true }),
     supabase.from('inbound_messages').select('id, household_id, user_id, message_id, from_addr, subject, received_at, status, detail, property_ids, created_at').order('received_at', { ascending: false }).limit(30),
+    supabase.from('places').select('*').order('created_at', { ascending: true }),
+    supabase.from('visits').select('*').order('scheduled_at', { ascending: true }),
+    supabase.from('contact_log').select('*').order('happened_at', { ascending: false }),
+    supabase.from('zone_notes').select('*').order('created_at', { ascending: true }),
   ])
-  const err = pr.error ?? ph.error ?? pc.error ?? as.error ?? ra.error ?? re.error ?? co.error ?? cr.error ?? zo.error ?? im.error
+  const err = pr.error ?? ph.error ?? pc.error ?? as.error ?? ra.error ?? re.error ?? co.error ?? cr.error ?? zo.error ?? im.error ?? pl.error ?? vi.error ?? cl.error ?? zn.error
   if (err) throw new Error(err.message)
   state.properties = (pr.data ?? []).map((r) => normalise(r as Record<string, unknown>))
   state.photos = (ph.data ?? []) as Photo[]
@@ -66,6 +74,10 @@ async function fetchAll(hid: string) {
   state.criteria = (cr.data as Criteria | null) ?? null
   state.zones = (zo.data ?? []) as Zone[]
   state.inbound = (im.data ?? []) as InboundMessage[]
+  state.places = (pl.data ?? []) as Place[]
+  state.visits = (vi.data ?? []) as Visit[]
+  state.contacts = (cl.data ?? []) as ContactEntry[]
+  state.zoneNotes = (zn.data ?? []) as ZoneNote[]
   state.loadedFor = hid
   state.loadedAt = Date.now()
   offline.value = false
@@ -340,6 +352,68 @@ export function useData() {
     }
   }
 
+  // ---------- después: lugares, visitas, contactos, notas de barrio, finanzas ----------
+  const places = computed(() => state.places)
+  const visitsOf = (propertyId: string) => state.visits.filter((v) => v.property_id === propertyId)
+  const contactsOf = (propertyId: string) => state.contacts.filter((c) => c.property_id === propertyId)
+  const zoneNotesOf = (zoneId: string) => state.zoneNotes.filter((n) => n.zone_id === zoneId)
+
+  async function addPlace(householdId: string, name: string, lat: number, lng: number) {
+    const { data, error } = await supabase.from('places').insert({ household_id: householdId, name: name.trim(), lat, lng }).select('*').single()
+    fail(error)
+    state.places.push(data as Place)
+  }
+  async function deletePlace(id: string) {
+    const { error } = await supabase.from('places').delete().eq('id', id)
+    fail(error)
+    state.places = state.places.filter((p) => p.id !== id)
+  }
+
+  async function addVisit(property: Property, userId: string, scheduledAt: string | null) {
+    const { data, error } = await supabase.from('visits').insert({ household_id: property.household_id, property_id: property.id, created_by: userId, scheduled_at: scheduledAt }).select('*').single()
+    fail(error)
+    state.visits.push(data as Visit)
+    return data as Visit
+  }
+  async function updateVisit(id: string, patch: Partial<Pick<Visit, 'scheduled_at' | 'done' | 'checklist' | 'notes'>>) {
+    const { error } = await supabase.from('visits').update(patch).eq('id', id)
+    fail(error)
+    const v = state.visits.find((x) => x.id === id)
+    if (v) Object.assign(v, patch)
+  }
+  async function deleteVisit(id: string) {
+    const { error } = await supabase.from('visits').delete().eq('id', id)
+    fail(error)
+    state.visits = state.visits.filter((v) => v.id !== id)
+  }
+
+  async function addContact(property: Property, userId: string, entry: Pick<ContactEntry, 'kind' | 'note' | 'next_step'> & { happened_at?: string }) {
+    const { data, error } = await supabase.from('contact_log').insert({ household_id: property.household_id, property_id: property.id, user_id: userId, ...entry }).select('*').single()
+    fail(error)
+    state.contacts.unshift(data as ContactEntry)
+  }
+  async function deleteContact(id: string) {
+    const { error } = await supabase.from('contact_log').delete().eq('id', id)
+    fail(error)
+    state.contacts = state.contacts.filter((c) => c.id !== id)
+  }
+
+  async function addZoneNote(zoneId: string, userId: string, body: string) {
+    const { data, error } = await supabase.from('zone_notes').insert({ zone_id: zoneId, user_id: userId, body: body.trim() }).select('*').single()
+    fail(error)
+    state.zoneNotes.push(data as ZoneNote)
+  }
+  async function deleteZoneNote(id: string) {
+    const { error } = await supabase.from('zone_notes').delete().eq('id', id)
+    fail(error)
+    state.zoneNotes = state.zoneNotes.filter((n) => n.id !== id)
+  }
+
+  async function saveFinance(householdId: string, finance: Record<string, unknown>) {
+    const { error } = await supabase.from('households').update({ finance }).eq('id', householdId)
+    fail(error)
+  }
+
   // ---------- avisos (Web Push) ----------
   async function loadPushSubscriptions(): Promise<PushSubscriptionRow[]> {
     const { data, error } = await supabase.from('push_subscriptions').select('*')
@@ -411,6 +485,20 @@ export function useData() {
     autoDiscarded,
     inbound,
     setInbox,
+    places,
+    visitsOf,
+    contactsOf,
+    zoneNotesOf,
+    addPlace,
+    deletePlace,
+    addVisit,
+    updateVisit,
+    deleteVisit,
+    addContact,
+    deleteContact,
+    addZoneNote,
+    deleteZoneNote,
+    saveFinance,
     loadPushSubscriptions,
     savePushSubscription,
     removePushSubscription,

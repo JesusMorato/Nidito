@@ -2,6 +2,8 @@
 
 export interface Household {
   blind_rating?: boolean
+  /** Datos para el coste real (ver lib/cost.ts). */
+  finance?: Record<string, unknown>
   id: string
   name: string
   invite_code: string
@@ -233,5 +235,69 @@ export interface InboundMessage {
   status: 'done' | 'ignored' | 'error'
   detail: string | null
   property_ids: string[]
+  created_at: string
+}
+
+// ---------- después: lugares, visitas, contactos, notas de barrio ----------
+
+export interface Place {
+  id: string
+  household_id: string
+  name: string
+  lat: number
+  lng: number
+  created_at: string
+}
+
+export interface Visit {
+  id: string
+  household_id: string
+  property_id: string
+  created_by: string
+  scheduled_at: string | null
+  done: boolean
+  /** true = revisado y bien, false = problema, ausente = sin mirar */
+  checklist: Record<string, boolean>
+  notes: string | null
+  created_at: string
+}
+
+export const VISIT_CHECKLIST: Array<{ key: string; label: string }> = [
+  { key: 'humedades', label: 'Humedades y manchas en techos y paredes' },
+  { key: 'presion_agua', label: 'Presión del agua (abrir grifos)' },
+  { key: 'ruido', label: 'Ruido con las ventanas cerradas' },
+  { key: 'orientacion', label: 'Orientación real y luz a esa hora' },
+  { key: 'ventanas', label: 'Ventanas y cierres' },
+  { key: 'instalaciones', label: 'Electricidad, caldera, aire' },
+  { key: 'fachada', label: 'Fachada y portal' },
+  { key: 'derramas', label: 'Derramas e ITE (preguntar)' },
+  { key: 'comunidad', label: 'Cuota de comunidad confirmada' },
+  { key: 'cobertura', label: 'Cobertura del móvil' },
+]
+
+export interface ContactEntry {
+  id: string
+  household_id: string
+  property_id: string
+  user_id: string
+  happened_at: string
+  kind: 'llamada' | 'mensaje' | 'correo' | 'visita' | 'otro'
+  note: string | null
+  next_step: string | null
+  created_at: string
+}
+export const CONTACT_KINDS: Array<{ value: ContactEntry['kind']; label: string }> = [
+  { value: 'llamada', label: 'Llamada' },
+  { value: 'mensaje', label: 'WhatsApp' },
+  { value: 'correo', label: 'Correo' },
+  { value: 'visita', label: 'Visita' },
+  { value: 'otro', label: 'Otro' },
+]
+
+export interface ZoneNote {
+  id: string
+  zone_id: string
+  user_id: string
+  body: string
   created_at: string
 }

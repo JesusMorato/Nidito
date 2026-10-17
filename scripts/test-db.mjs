@@ -344,6 +344,35 @@ async function fase4() {
   check((await sql(`select inbox from properties where id = $1`, [idB])).rows[0].inbox === 'aceptada', 'un extraño no cambia la bandeja')
 }
 
+async function despues() {
+  console.log('Después · lugares, visitas, contactos, notas de barrio, finanzas')
+  await as(ANA, () => sql(`update households set finance = '{"rent": 934, "down_pct": 20}'`))
+  const fin = await as(LUIS, async () => (await sql(`select finance from households`)).rows[0].finance)
+  check(fin.rent === 934, 'los datos de finanzas son del hogar')
+
+  await as(ANA, () => sql(`insert into places (household_id, name, lat, lng) values ($1, 'Trabajo Ana', 40.42, -3.70)`, [ctx.hid]))
+  check((await as(LUIS, async () => (await sql(`select count(*)::int as n from places`)).rows[0].n)) === 1, 'Luis ve el lugar de Ana')
+  check((await as(OTRO, async () => (await sql(`select count(*)::int as n from places`)).rows[0].n)) === 0, 'un extraño no ve lugares')
+
+  await as(ANA, () => sql(`insert into visits (household_id, property_id, created_by, scheduled_at, checklist) values ($1, $2, $3, now() + interval '2 days', '{"humedades": true}')`, [ctx.hid, ctx.casa, ANA]))
+  await as(LUIS, () => sql(`update visits set done = true, notes = 'Bien de luz'`))
+  const v = await as(ANA, async () => (await sql(`select done, notes from visits where property_id = $1`, [ctx.casa])).rows[0])
+  check(v.done === true && v.notes === 'Bien de luz', 'los dos editan la visita')
+  await as(LUIS, () => expectError(() => sql(`insert into visits (household_id, property_id, created_by) values ($1, $2, $3)`, [ctx.hid, ctx.casa, ANA]), /policy|permission|denied/i, 'no se crea una visita a nombre de otro'))
+
+  await as(LUIS, () => sql(`insert into contact_log (household_id, property_id, user_id, kind, note, next_step) values ($1, $2, $3, 'llamada', 'Hablé con Marta', 'Visita el sábado')`, [ctx.hid, ctx.casa, LUIS]))
+  const cl = await as(ANA, async () => (await sql(`select note from contact_log where property_id = $1`, [ctx.casa])).rows)
+  check(cl.length === 1 && cl[0].note === 'Hablé con Marta', 'Ana ve el contacto de Luis')
+  const borrado = await as(ANA, async () => (await sql(`delete from contact_log where user_id = $1 returning 1`, [LUIS])).rows.length)
+  check(borrado === 0, 'Ana no borra el contacto de Luis')
+
+  const zona = (await sql(`select id from zones limit 1`)).rows[0].id
+  await as(ANA, () => sql(`insert into zone_notes (zone_id, user_id, body) values ($1, $2, 'De noche hay mucho ruido en la calle principal')`, [zona, ANA]))
+  const zn = await as(LUIS, async () => (await sql(`select count(*)::int as n from zone_notes`)).rows[0].n)
+  check(zn === 1, 'Luis ve la nota de barrio')
+  check((await as(OTRO, async () => (await sql(`select count(*)::int as n from zone_notes`)).rows[0].n)) === 0, 'un extraño no ve notas de barrio')
+}
+
 // ---------- ejecución ----------
 try {
   await setup()
@@ -354,6 +383,7 @@ try {
   await fase2()
   await fase3()
   await fase4()
+  await despues()
 } catch (e) {
   console.error(e)
   fallos++

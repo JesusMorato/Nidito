@@ -19,6 +19,11 @@ import StatusPicker from '../components/StatusPicker.vue'
 import PhotoStrip from '../components/PhotoStrip.vue'
 import RatingsPanel from '../components/RatingsPanel.vue'
 import FitCard from '../components/FitCard.vue'
+import CostCard from '../components/CostCard.vue'
+import PlacesDistance from '../components/PlacesDistance.vue'
+import VisitsCard from '../components/VisitsCard.vue'
+import ContactsCard from '../components/ContactsCard.vue'
+import ZoneNotes from '../components/ZoneNotes.vue'
 import Sheet from '../components/Sheet.vue'
 import { parseListing } from '../lib/parseListing'
 import UiIcon from '../components/UiIcon.vue'
@@ -43,6 +48,7 @@ const extrasOn = computed(() => EXTRA_KEYS.filter((x) => p.value?.extras?.[x.key
 const extrasOff = computed(() => EXTRA_KEYS.filter((x) => p.value?.extras?.[x.key] === false).map((x) => x.label))
 
 const statusOpen = ref(false)
+const zone = computed(() => (p.value?.in_zone ? data.zones.value.find((z) => z.name === p.value!.in_zone) ?? null : null))
 
 // --- duplicados: al abrir la ficha se pregunta a la base de datos si hay otra igual ---
 const duplicates = ref<Property[]>([])
@@ -212,6 +218,12 @@ async function remove() {
         <button type="button" class="ghost small" @click="openMaps">Abrir en Google Maps</button>
       </div>
     </div>
+
+    <CostCard :property="p" />
+    <PlacesDistance :property="p" />
+    <VisitsCard :property="p" />
+    <ContactsCard :property="p" />
+    <div v-if="zone" class="card"><ZoneNotes :zone="zone" /></div>
 
     <div v-if="p.community_fee != null || p.ibi != null || p.notes" class="card">
       <h2>Gastos y notas</h2>
