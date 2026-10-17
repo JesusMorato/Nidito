@@ -22,6 +22,9 @@ import PropertyCard from '../components/PropertyCard.vue'
 import FilterSheet from '../components/FilterSheet.vue'
 import EmptyState from '../components/EmptyState.vue'
 import UiIcon from '../components/UiIcon.vue'
+import Sheet from '../components/Sheet.vue'
+import { useConfirm } from '../composables/useConfirm'
+import type { Zone } from '../types'
 
 const router = useRouter()
 const { state: session, partner } = useSession()
@@ -29,6 +32,7 @@ const data = useData()
 const { state: fs } = useFilters()
 const { visible, scores, allNeighborhoods } = useVisible()
 const { toast } = useToast()
+const { confirm } = useConfirm()
 
 const mapEl = ref<HTMLDivElement | null>(null)
 let map: L.Map | null = null
@@ -59,6 +63,79 @@ function draw() {
   }
 }
 
+// --- zonas: polígonos del hogar y modo dibujo ---
+const ZONE_COLORS = ['#2f6b73', '#b0583c', '#3f7d5a', '#b8862b', '#5b4f8f', '#c0392b']
+let zoneLayer: L.LayerGroup | null = null
+const showZones = ref(true)
+const drawing = ref(false)
+const drawPoints = ref<Array<[number, number]>>([])
+let drawLayer: L.LayerGroup | null = null
+const zoneNameOpen = ref(false)
+const zoneName = ref('')
+const zonesOpen = ref(false)
+
+function drawZones() {
+  if (!map || !zoneLayer) return
+  zoneLayer.clearLayers()
+  if (!showZones.value) return
+  for (const z of data.zones.value) {
+    const poly = L.polygon(z.polygon as L.LatLngExpression[], { color: z.color, weight: 2, fillOpacity: 0.08, dashArray: '6 4' })
+    poly.bindTooltip(z.name, { permanent: false, direction: 'center' })
+    zoneLayer.addLayer(poly)
+  }
+}
+function drawDraft() {
+  if (!map || !drawLayer) return
+  drawLayer.clearLayers()
+  const pts = drawPoints.value
+  for (const p of pts) drawLayer.addLayer(L.circleMarker(p, { radius: 5, color: '#2f6b73', fillColor: '#fff', fillOpacity: 1, weight: 2 }))
+  if (pts.length >= 2) drawLayer.addLayer(L.polyline(pts, { color: '#2f6b73', weight: 2, dashArray: '4 4' }))
+  if (pts.length >= 3) drawLayer.addLayer(L.polygon(pts, { color: '#2f6b73', weight: 1, fillOpacity: 0.12 }))
+}
+function startDraw() {
+  drawing.value = true
+  drawPoints.value = []
+  selected.value = null
+  zonesOpen.value = false
+  drawDraft()
+  toast('Toca el mapa para marcar los vértices de la zona')
+}
+function cancelDraw() {
+  drawing.value = false
+  drawPoints.value = []
+  drawDraft()
+}
+function undoPoint() {
+  drawPoints.value = drawPoints.value.slice(0, -1)
+  drawDraft()
+}
+function finishDraw() {
+  if (drawPoints.value.length < 3) {
+    toast('Una zona necesita al menos 3 puntos')
+    return
+  }
+  zoneName.value = ''
+  zoneNameOpen.value = true
+}
+async function saveZone() {
+  if (!session.household || !zoneName.value.trim()) return
+  const color = ZONE_COLORS[data.zones.value.length % ZONE_COLORS.length]
+  zoneNameOpen.value = false
+  try {
+    await data.addZone(session.household.id, zoneName.value, drawPoints.value, color)
+    toast('Zona guardada; encaje recalculado')
+  } catch (e) {
+    toast(`No se ha podido guardar: ${(e as Error).message}`)
+  }
+  cancelDraw()
+}
+async function removeZone(z: Zone) {
+  if (await confirm({ title: 'Borrar zona', message: `¿Borrar "${z.name}"? Se recalcula el encaje de las casas.` })) {
+    await data.deleteZone(z.id).catch((e) => toast((e as Error).message))
+  }
+}
+watch([() => data.zones.value, showZones], () => drawZones(), { deep: true })
+
 let fittedOnce = false
 function fitAll() {
   if (!map || !withPin.value.length) return
@@ -79,15 +156,25 @@ onMounted(async () => {
     iconCreateFunction: (c) => clusterIcon(c.getChildCount()),
   })
   map.addLayer(cluster)
-  map.on('click', () => { selected.value = null })
+  zoneLayer = L.layerGroup().addTo(map)
+  drawLayer = L.layerGroup().addTo(map)
+  map.on('click', (ev: L.LeafletMouseEvent) => {
+    if (drawing.value) {
+      drawPoints.value = [...drawPoints.value, [ev.latlng.lat, ev.latlng.lng]]
+      drawDraft()
+      return
+    }
+    selected.value = null
+  })
   await data.ensureLoaded(session.household?.id)
   draw()
+  drawZones()
   if (!fittedOnce && withPin.value.length) {
     fitAll()
     fittedOnce = true
   }
 })
-onBeforeUnmount(() => { map?.remove(); map = null; cluster = null })
+onBeforeUnmount(() => { map?.remove(); map = null; cluster = null; zoneLayer = null; drawLayer = null })
 
 watch([withPin, colorBy, selected], () => draw(), { deep: false })
 
@@ -123,6 +210,7 @@ const firstPhoto = (p: Property) => data.photosOf(p.id)[0] ?? null
       </button>
       <button type="button" class="map-btn" aria-label="Ver todas" title="Ver todas" @click="fitAll"><UiIcon name="home" :size="20" /></button>
       <button type="button" class="map-btn" aria-label="Mi ubicación" title="Mi ubicación" @click="locateMe"><UiIcon name="pin" :size="20" /></button>
+      <button type="button" class="map-btn" aria-label="Zonas" title="Zonas" @click="zonesOpen = true"><UiIcon name="zone" :size="20" /></button>
       <button v-if="hasRatings" type="button" class="map-btn text" @click="colorBy = colorBy === 'estado' ? 'nota' : 'estado'">
         {{ colorBy === 'estado' ? 'Color: estado' : 'Color: nota' }}
       </button>
@@ -144,8 +232,15 @@ const firstPhoto = (p: Property) => data.photosOf(p.id)[0] ?? null
       </div>
     </div>
 
+    <div v-if="drawing" class="map-draw">
+      <span class="grow tiny">Zona nueva: {{ drawPoints.length }} {{ drawPoints.length === 1 ? 'punto' : 'puntos' }}</span>
+      <button type="button" class="ghost small" :disabled="!drawPoints.length" @click="undoPoint">Deshacer</button>
+      <button type="button" class="ghost small" @click="cancelDraw">Cancelar</button>
+      <button type="button" class="small" :disabled="drawPoints.length < 3" @click="finishDraw">Terminar</button>
+    </div>
+
     <transition name="slide-up">
-      <div v-if="selected" class="map-card" @click="openSelected">
+      <div v-if="selected && !drawing" class="map-card" @click="openSelected">
         <PropertyCard :property="selected" :photo="firstPhoto(selected)" :photo-url="firstPhoto(selected) ? data.photoUrl(firstPhoto(selected)!) : ''" :prices="data.pricesOf(selected.id)" compact>
           <template #tags>
             <span v-if="scores[selected.id]?.joint != null" class="tag">★ {{ formatScore(scores[selected.id].joint) }}</span>
@@ -155,6 +250,25 @@ const firstPhoto = (p: Property) => data.photosOf(p.id)[0] ?? null
     </transition>
 
     <FilterSheet v-if="fs.open" :neighborhoods="allNeighborhoods" :has-ratings="hasRatings" @close="fs.open = false" />
+
+    <Sheet v-if="zonesOpen" title="Vuestras zonas" @close="zonesOpen = false">
+      <p class="muted">Dibuja en el mapa los barrios o radios donde buscáis. Sirven para el encaje (si en Criterios exigís estar dentro) y se ven como capa.</p>
+      <ul v-if="data.zones.value.length" class="list">
+        <li v-for="z in data.zones.value" :key="z.id">
+          <span class="zone-dot" :style="{ background: z.color }" /><span class="grow">{{ z.name }}</span>
+          <button type="button" class="icon" aria-label="Borrar zona" @click="removeZone(z)"><UiIcon name="trash" :size="18" /></button>
+        </li>
+      </ul>
+      <p v-else class="tiny">Todavía no hay zonas.</p>
+      <label class="check" style="margin: 0.6rem 0"><input v-model="showZones" type="checkbox" /> Enseñar las zonas en el mapa</label>
+      <div class="row" style="justify-content: flex-end"><button type="button" @click="startDraw"><UiIcon name="plus" :size="16" /> Dibujar zona</button></div>
+    </Sheet>
+    <Sheet v-if="zoneNameOpen" title="Nombre de la zona" @close="zoneNameOpen = false">
+      <form @submit.prevent="saveZone">
+        <div class="field"><input v-model="zoneName" placeholder="Fuencarral, cerca del metro Tres Olivos…" maxlength="40" required /></div>
+        <div class="row" style="justify-content: flex-end"><button type="submit">Guardar zona</button></div>
+      </form>
+    </Sheet>
   </div>
 </template>
 
@@ -164,6 +278,8 @@ const firstPhoto = (p: Property) => data.photosOf(p.id)[0] ?? null
 .map-tools { position: absolute; top: 10px; right: 10px; z-index: 5; display: flex; flex-direction: column; gap: 6px; }
 .map-btn { width: 42px; height: 42px; padding: 0; border-radius: 12px; background: var(--surface); color: var(--ink); border-color: transparent; box-shadow: var(--shadow); }
 .map-btn.text { width: auto; padding: 0 0.7rem; font-size: 0.8rem; }
+.map-draw { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 6; display: flex; gap: 0.3rem; align-items: center; background: var(--surface); border-radius: 999px; padding: 0.4rem 0.4rem 0.4rem 0.9rem; box-shadow: var(--shadow); max-width: 560px; margin: 0 auto; }
+.zone-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
 .map-note { position: absolute; top: 10px; left: 10px; z-index: 5; background: var(--surface); border-radius: 999px; padding: 0.3rem 0.7rem; font-size: 0.75rem; color: var(--ink-2); box-shadow: var(--shadow); max-width: calc(100% - 70px); }
 .map-empty { position: absolute; left: 16px; right: 16px; top: 50%; transform: translateY(-50%); z-index: 5; max-width: 420px; margin: 0 auto; }
 .map-card { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 5; max-width: 560px; margin: 0 auto; cursor: pointer; }

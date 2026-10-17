@@ -9,6 +9,8 @@ import { usePush } from '../composables/usePush'
 import type { Aspect } from '../types'
 import UiIcon from '../components/UiIcon.vue'
 import Sheet from '../components/Sheet.vue'
+import CriteriaCard from '../components/CriteriaCard.vue'
+import LinkShareCard from '../components/LinkShareCard.vue'
 
 const router = useRouter()
 const { state, me, partner, signOut, renameHousehold, renameMe, refresh } = useSession()
@@ -145,6 +147,8 @@ async function logout() {
       </div>
     </div>
 
+    <CriteriaCard />
+
     <div class="card">
       <div class="section-title" style="margin-top: 0">
         <h2>Aspectos que valoráis</h2>
@@ -168,6 +172,8 @@ async function logout() {
         Valoración a ciegas: no ves las estrellas del otro hasta haber puesto las tuyas
       </label>
     </div>
+
+    <LinkShareCard />
 
     <div class="card">
       <h2>Avisos en el móvil</h2>

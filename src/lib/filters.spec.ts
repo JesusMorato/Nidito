@@ -10,6 +10,7 @@ function casa(over: Partial<Property>): Property {
     price: null, m2: null, m2_useful: null, rooms: null, baths: null, floor: null, type: 'piso', exterior: null,
     extras: {}, community_fee: null, ibi: null, notes: null, source: 'manual', url: null, agency: null, contact: null,
     external_ref: null, raw_text: null, cadastral_ref: null, status: 'nueva', merged_into: null,
+    fit_score: null, fit_notes: null, in_zone: null, inbox: 'aceptada', discard_reason: null,
     ...over,
   }
 }

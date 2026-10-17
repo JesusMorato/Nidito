@@ -3,7 +3,7 @@
 // llaman a Supabase directamente. Las casas se guardan SIEMPRE con save_property.
 import { computed, reactive, ref } from 'vue'
 import { supabase } from '../supabase'
-import type { Aspect, Comment, Photo, PriceEntry, Property, PropertyInput, PropertyStatus, PushSubscriptionRow, Rating, Reaction } from '../types'
+import type { Aspect, Comment, Criteria, IngestToken, Photo, PriceEntry, Property, PropertyInput, PropertyStatus, PushSubscriptionRow, Rating, Reaction, Zone } from '../types'
 import { isNetworkError, loadSnapshot, saveSnapshot } from '../lib/offline'
 import { resizeImage } from '../lib/resizeImage'
 
@@ -18,15 +18,17 @@ interface State {
   ratings: Rating[]
   reactions: Reaction[]
   comments: Comment[]
+  criteria: Criteria | null
+  zones: Zone[]
 }
 
-const state = reactive<State>({ loadedFor: null, loadedAt: 0, loading: false, properties: [], photos: [], prices: [], aspects: [], ratings: [], reactions: [], comments: [] })
+const state = reactive<State>({ loadedFor: null, loadedAt: 0, loading: false, properties: [], photos: [], prices: [], aspects: [], ratings: [], reactions: [], comments: [], criteria: null, zones: [] })
 /** true mientras enseñamos la copia local porque el servidor no responde. */
 const offline = ref(false)
 /** URLs firmadas de las fotos (el cubo es privado), por ruta. Caducan en una hora. */
 const photoUrls = reactive<Record<string, string>>({})
 
-type Snapshot = Pick<State, 'properties' | 'photos' | 'prices' | 'aspects' | 'ratings' | 'reactions' | 'comments'>
+type Snapshot = Pick<State, 'properties' | 'photos' | 'prices' | 'aspects' | 'ratings' | 'reactions' | 'comments' | 'criteria' | 'zones'>
 
 function normalise(p: Record<string, unknown>): Property {
   return {
@@ -39,7 +41,7 @@ function normalise(p: Record<string, unknown>): Property {
 }
 
 async function fetchAll(hid: string) {
-  const [pr, ph, pc, as, ra, re, co] = await Promise.all([
+  const [pr, ph, pc, as, ra, re, co, cr, zo] = await Promise.all([
     supabase.from('properties').select('*').order('created_at', { ascending: false }),
     supabase.from('photos').select('*').order('created_at', { ascending: true }),
     supabase.from('price_history').select('*').order('seen_at', { ascending: true }),
@@ -47,8 +49,10 @@ async function fetchAll(hid: string) {
     supabase.from('ratings').select('*'),
     supabase.from('property_reactions').select('*'),
     supabase.from('comments').select('*').order('created_at', { ascending: true }),
+    supabase.from('criteria').select('*').maybeSingle(),
+    supabase.from('zones').select('*').order('created_at', { ascending: true }),
   ])
-  const err = pr.error ?? ph.error ?? pc.error ?? as.error ?? ra.error ?? re.error ?? co.error
+  const err = pr.error ?? ph.error ?? pc.error ?? as.error ?? ra.error ?? re.error ?? co.error ?? cr.error ?? zo.error
   if (err) throw new Error(err.message)
   state.properties = (pr.data ?? []).map((r) => normalise(r as Record<string, unknown>))
   state.photos = (ph.data ?? []) as Photo[]
@@ -57,10 +61,12 @@ async function fetchAll(hid: string) {
   state.ratings = (ra.data ?? []).map((r) => ({ ...(r as Rating), stars: Number((r as Rating).stars) }))
   state.reactions = (re.data ?? []) as Reaction[]
   state.comments = (co.data ?? []) as Comment[]
+  state.criteria = (cr.data as Criteria | null) ?? null
+  state.zones = (zo.data ?? []) as Zone[]
   state.loadedFor = hid
   state.loadedAt = Date.now()
   offline.value = false
-  const snap: Snapshot = { properties: state.properties, photos: state.photos, prices: state.prices, aspects: state.aspects, ratings: state.ratings, reactions: state.reactions, comments: state.comments }
+  const snap: Snapshot = { properties: state.properties, photos: state.photos, prices: state.prices, aspects: state.aspects, ratings: state.ratings, reactions: state.reactions, comments: state.comments, criteria: state.criteria, zones: state.zones }
   saveSnapshot(`datos:${hid}`, snap)
 }
 
@@ -258,6 +264,65 @@ export function useData() {
     await refreshRatings()
   }
 
+  // ---------- criterios, zonas, duplicados y enlaces ----------
+  const criteria = computed(() => state.criteria)
+  const zones = computed(() => state.zones)
+
+  async function saveCriteria(householdId: string, c: Omit<Criteria, 'household_id' | 'updated_at'>) {
+    const row = { household_id: householdId, ...c, updated_at: new Date().toISOString() }
+    const { error } = await supabase.from('criteria').upsert(row, { onConflict: 'household_id' })
+    fail(error)
+    state.criteria = row
+    await reapplyCriteria()
+  }
+  /** Vuelve a calcular el encaje de todas las casas (tras cambiar criterios o zonas). */
+  async function reapplyCriteria() {
+    const { error } = await supabase.rpc('reapply_criteria')
+    fail(error)
+    const { data } = await supabase.from('properties').select('*').order('created_at', { ascending: false })
+    if (data) state.properties = data.map((r) => normalise(r as Record<string, unknown>))
+  }
+  async function addZone(householdId: string, name: string, polygon: Array<[number, number]>, color: string) {
+    const { data, error } = await supabase.from('zones').insert({ household_id: householdId, name: name.trim(), polygon, color }).select('*').single()
+    fail(error)
+    state.zones.push(data as Zone)
+    await reapplyCriteria()
+  }
+  async function deleteZone(id: string) {
+    const { error } = await supabase.from('zones').delete().eq('id', id)
+    fail(error)
+    state.zones = state.zones.filter((z) => z.id !== id)
+    await reapplyCriteria()
+  }
+  async function findDuplicates(propertyId: string): Promise<Property[]> {
+    const { data, error } = await supabase.rpc('find_duplicates', { p_id: propertyId })
+    fail(error)
+    return ((data ?? []) as Record<string, unknown>[]).map(normalise)
+  }
+  async function mergeProperties(keepId: string, dropId: string) {
+    const { error } = await supabase.rpc('merge_properties', { p_keep: keepId, p_drop: dropId })
+    fail(error)
+    await refresh()
+  }
+  async function loadIngestToken(): Promise<IngestToken | null> {
+    const { data, error } = await supabase.from('ingest_tokens').select('*').maybeSingle()
+    fail(error)
+    return (data as IngestToken | null) ?? null
+  }
+  async function createIngestToken(householdId: string, userId: string): Promise<IngestToken> {
+    const bytes = new Uint8Array(18)
+    crypto.getRandomValues(bytes)
+    const token = Array.from(bytes, (b) => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('')
+    const row = { user_id: userId, household_id: householdId, token }
+    const { data, error } = await supabase.from('ingest_tokens').upsert(row, { onConflict: 'user_id' }).select('*').single()
+    fail(error)
+    return data as IngestToken
+  }
+  async function deleteIngestToken(userId: string) {
+    const { error } = await supabase.from('ingest_tokens').delete().eq('user_id', userId)
+    fail(error)
+  }
+
   // ---------- avisos (Web Push) ----------
   async function loadPushSubscriptions(): Promise<PushSubscriptionRow[]> {
     const { data, error } = await supabase.from('push_subscriptions').select('*')
@@ -314,6 +379,17 @@ export function useData() {
     deleteAspect,
     moveAspect,
     setBlindRating,
+    criteria,
+    zones,
+    saveCriteria,
+    reapplyCriteria,
+    addZone,
+    deleteZone,
+    findDuplicates,
+    mergeProperties,
+    loadIngestToken,
+    createIngestToken,
+    deleteIngestToken,
     loadPushSubscriptions,
     savePushSubscription,
     removePushSubscription,

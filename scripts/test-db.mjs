@@ -225,6 +225,84 @@ async function fase2() {
   check(subs === 0, 'Luis no ve los aparatos de Ana')
 }
 
+async function fase3() {
+  console.log('Fase 3 · criterios, zonas, duplicados y enlaces')
+  // Geometría
+  const d = (await sql(`select distance_m(40.4168, -3.7038, 40.4966, -3.6915) as d`)).rows[0].d
+  check(d > 8500 && d < 9500, 'distance_m: Sol → Fuencarral ≈ 9 km')
+  const poly = JSON.stringify([[40.48, -3.72], [40.48, -3.66], [40.52, -3.66], [40.52, -3.72]])
+  check((await sql(`select point_in_polygon(40.50, -3.69, $1::jsonb) as r`, [poly])).rows[0].r === true, 'point_in_polygon: dentro')
+  check((await sql(`select point_in_polygon(40.42, -3.70, $1::jsonb) as r`, [poly])).rows[0].r === false, 'point_in_polygon: fuera')
+
+  // Zona y criterios del hogar
+  await as(ANA, () => sql(`insert into zones (household_id, name, polygon) values ($1, 'Fuencarral', $2::jsonb)`, [ctx.hid, poly]))
+  await as(ANA, () => sql(`insert into criteria (household_id, max_price, min_m2, min_rooms, must, prefs) values ($1, 380000, 80, 3, '{"ascensor": true}', '{"terraza": 2}')`, [ctx.hid]))
+  const zonasAjenas = await as(OTRO, async () => (await sql(`select count(*)::int as n from zones`)).rows[0].n)
+  check(zonasAjenas === 0, 'un extraño no ve las zonas')
+
+  // La casa de Ana vuelve a tener la ficha completa (la actualización parcial de la fase 1 la dejó sin metros ni ubicación).
+  await as(ANA, () => sql(`select save_property($1::jsonb)`, [JSON.stringify({ id: ctx.casa, title: 'Piso en Fuencarral', price: 370000, m2: 92, rooms: 3, baths: 2, lat: 40.49, lng: -3.69, address: 'Calle de Alonso Cano 12', floor: '4', extras: { ascensor: true }, external_ref: 'idealista:1' })]))
+  // La casa de Ana (370.000, 92 m², 3 hab, ascensor, en Fuencarral): cumple todo.
+  const n = await as(LUIS, async () => (await sql(`select reapply_criteria() as n`)).rows[0].n)
+  check(n >= 2, 'reapply_criteria recorre las casas del hogar')
+  let c = await as(ANA, async () => (await sql(`select fit_score, fit_notes, in_zone, inbox from properties where id = $1`, [ctx.casa])).rows[0])
+  check(c.in_zone === 'Fuencarral', 'la casa está en la zona')
+  check(c.fit_notes.fail.length === 0 && c.fit_score >= 90, `cumple todos los criterios (score ${c.fit_score})`)
+  check(c.inbox === 'aceptada', 'lo que metéis vosotros entra directo')
+
+  // Una casa cara, pequeña y fuera de zona: solo avisa (manual), pero con los fallos apuntados.
+  const cara = await as(LUIS, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Cara y lejos', price: 450000, m2: 60, rooms: 2, lat: 40.42, lng: -3.70, extras: { ascensor: false, terraza: true } })])).rows[0].id)
+  c = await as(LUIS, async () => (await sql(`select fit_score, fit_notes, in_zone, inbox from properties where id = $1`, [cara])).rows[0])
+  check(c.fit_notes.fail.length === 5 && c.fit_score === 0, `apunta los 5 fallos (${c.fit_notes.fail.join(' | ')})`)
+  check(c.fit_notes.ok.includes('terraza'), 'la preferencia cuenta aunque falle lo demás')
+  check(c.inbox === 'aceptada', 'a mano entra aunque incumpla')
+
+  // Una casa automática (correo) que incumple va a Descartadas con el motivo; una que cumple, a la Bandeja.
+  const correoMala = await as(ANA, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Del correo, mala', price: 900000, source: 'correo' })])).rows[0].id)
+  c = await as(ANA, async () => (await sql(`select inbox, discard_reason from properties where id = $1`, [correoMala])).rows[0])
+  check(c.inbox === 'descartada' && /precio/.test(c.discard_reason), 'lo automático que incumple se descarta con motivo')
+  const correoBuena = await as(ANA, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Del correo, buena', price: 300000, m2: 90, rooms: 3, lat: 40.5, lng: -3.69, extras: { ascensor: true }, source: 'correo' })])).rows[0].id)
+  c = await as(ANA, async () => (await sql(`select inbox from properties where id = $1`, [correoBuena])).rows[0])
+  check(c.inbox === 'bandeja', 'lo automático que cumple va a la Bandeja')
+
+  // Duplicados: misma dirección y planta; a menos de 30 m con m² y precio parecidos; misma referencia.
+  const dup1 = await as(LUIS, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Otra inmobiliaria', price: 365000, m2: 90, lat: 40.49001, lng: -3.69001 })])).rows[0].id)
+  const dup2 = await as(LUIS, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Misma dirección', address: 'calle de alonso cano 12', floor: '4' })])).rows[0].id)
+  const dup3 = await as(LUIS, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Mismo bloque, otra planta', address: 'Calle de Alonso Cano 12', floor: '2' })])).rows[0].id)
+  const found = await as(ANA, async () => (await sql(`select id from find_duplicates($1)`, [ctx.casa])).rows.map((r) => r.id))
+  check(found.includes(dup1) && found.includes(dup2) && !found.includes(dup3), 'find_duplicates: cerca+parecida y misma dirección+planta sí; otra planta no')
+  const foundOtro = await as(OTRO, async () => (await sql(`select count(*)::int as n from find_duplicates($1)`, [ctx.casa])).rows[0].n)
+  check(foundOtro === 0, 'un extraño no busca duplicados en vuestro hogar')
+
+  // Fusionar: la fusionada queda marcada, sus datos rellenan huecos y sus precios pasan.
+  await as(ANA, () => sql(`insert into comments (property_id, user_id, body) values ($1, $2, 'Comentario en la duplicada')`, [dup1, ANA]))
+  await as(ANA, () => sql(`select merge_properties($1, $2)`, [ctx.casa, dup1]))
+  c = await as(LUIS, async () => (await sql(`select merged_into from properties where id = $1`, [dup1])).rows[0])
+  check(c.merged_into === ctx.casa, 'la duplicada apunta a la que se queda')
+  const coms = await as(LUIS, async () => (await sql(`select count(*)::int as n from comments where property_id = $1`, [ctx.casa])).rows[0].n)
+  check(coms === 2, 'los comentarios pasan a la que se queda')
+  const precios = await as(LUIS, async () => (await sql(`select count(*)::int as n from price_history where property_id = $1`, [ctx.casa])).rows[0].n)
+  check(precios === 3, 'el historial de precio se junta')
+  await as(OTRO, () => expectError(() => sql(`select merge_properties($1, $2)`, [ctx.casa, dup2]), /hogar/, 'un extraño no fusiona'))
+
+  // Enlace compartido con código secreto.
+  await as(LUIS, () => sql(`insert into ingest_tokens (user_id, household_id, token) values ($1, $2, 'tok-luis-1234567890')`, [LUIS, ctx.hid]))
+  const anaVeToken = await as(ANA, async () => (await sql(`select count(*)::int as n from ingest_tokens`)).rows[0].n)
+  check(anaVeToken === 0, 'Ana no ve el código de Luis')
+  await as(null, () => expectError(() => sql(`select register_link('malo', 'https://x', 't', null)`), /no válido/, 'register_link con código malo'))
+  const linkId = await as(null, async () => (await sql(`select register_link('tok-luis-1234567890', 'https://www.idealista.com/inmueble/777/', 'Piso en venta en calle Mayor, 3 hab', '299.000 € 3 hab 95 m2') as id`)).rows[0].id)
+  c = await as(ANA, async () => (await sql(`select title, source, external_ref, price, created_by, inbox from properties where id = $1`, [linkId])).rows[0])
+  check(c.source === 'enlace' && c.external_ref === 'idealista:777' && c.price === 299000 && c.created_by === LUIS && c.inbox === 'aceptada', 'el enlace crea la casa a nombre de Luis con referencia y precio')
+  // El mismo enlace otra vez con otro precio: no duplica, apunta el precio.
+  const again = await as(null, async () => (await sql(`select register_link('tok-luis-1234567890', 'https://www.idealista.com/inmueble/777/', 'x', 'ahora 289.000 €') as id`)).rows[0].id)
+  check(again === linkId, 'el mismo enlace no se duplica')
+  const hist = await as(ANA, async () => (await sql(`select price from price_history where property_id = $1 order by seen_at`, [linkId])).rows.map((r) => r.price))
+  check(hist.length === 2 && hist[1] === 289000, 'la segunda llegada apunta la bajada')
+  // Con sesión de otro hogar tampoco se puede usar el código ajeno para colarse: solo crea en el hogar del código.
+  const hh = await as(OTRO, async () => (await sql(`select household_id from properties where id = $1`, [linkId])).rows)
+  check(hh.length === 0, 'un extraño sigue sin ver la casa creada por enlace')
+}
+
 // ---------- ejecución ----------
 try {
   await setup()
@@ -233,6 +311,7 @@ try {
   await fase0()
   await fase1()
   await fase2()
+  await fase3()
 } catch (e) {
   console.error(e)
   fallos++

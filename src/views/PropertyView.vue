@@ -11,13 +11,16 @@ import { useEditor } from '../composables/useEditor'
 import { useConfirm } from '../composables/useConfirm'
 import { useToast } from '../composables/useToast'
 import { formatDate, formatEur, formatM2, pricePerM2 } from '../lib/format'
-import { EXTRA_KEYS, PROPERTY_TYPES, SOURCE_LABELS, type Photo, type PropertyStatus } from '../types'
+import { EXTRA_KEYS, PROPERTY_TYPES, SOURCE_LABELS, type Photo, type Property, type PropertyStatus } from '../types'
 import { STATUS_COLOR } from '../lib/status'
 import { pinIcon } from '../lib/mapPins'
 import StatusChip from '../components/StatusChip.vue'
 import StatusPicker from '../components/StatusPicker.vue'
 import PhotoStrip from '../components/PhotoStrip.vue'
 import RatingsPanel from '../components/RatingsPanel.vue'
+import FitCard from '../components/FitCard.vue'
+import Sheet from '../components/Sheet.vue'
+import { parseListing } from '../lib/parseListing'
 import UiIcon from '../components/UiIcon.vue'
 
 const route = useRoute()
@@ -40,6 +43,42 @@ const extrasOn = computed(() => EXTRA_KEYS.filter((x) => p.value?.extras?.[x.key
 const extrasOff = computed(() => EXTRA_KEYS.filter((x) => p.value?.extras?.[x.key] === false).map((x) => x.label))
 
 const statusOpen = ref(false)
+
+// --- duplicados: al abrir la ficha se pregunta a la base de datos si hay otra igual ---
+const duplicates = ref<Property[]>([])
+const dupOpen = ref(false)
+let dupCheckedFor = ''
+watch(p, async (val) => {
+  if (!val || val.id === dupCheckedFor) return
+  dupCheckedFor = val.id
+  duplicates.value = await data.findDuplicates(val.id).catch(() => [])
+}, { immediate: true })
+async function merge(other: Property) {
+  if (!p.value) return
+  const ok = await confirm({
+    title: 'Fusionar casas',
+    message: `"${other.title}" pasa a formar parte de "${p.value.title}": fotos, precios, valoraciones y comentarios se juntan, y lo que a esta le falte se coge de la otra.`,
+    confirmLabel: 'Fusionar',
+    danger: false,
+  })
+  if (!ok) return
+  dupOpen.value = false
+  try {
+    await data.mergeProperties(p.value.id, other.id)
+    duplicates.value = duplicates.value.filter((d) => d.id !== other.id)
+    toast('Casas fusionadas')
+  } catch (e) {
+    toast(`No se ha podido fusionar: ${(e as Error).message}`)
+  }
+}
+
+/** Enlace compartido o texto pegado sin completar: el lector vuelve a leer el texto guardado. */
+function fillFromText() {
+  if (!p.value?.raw_text) return
+  const parsed = parseListing(p.value.raw_text)
+  const merged = { ...parsed, ...Object.fromEntries(Object.entries(p.value).filter(([, v]) => v != null && v !== '')), id: p.value.id, title: p.value.title, extras: { ...(parsed.extras ?? {}), ...(p.value.extras ?? {}) } } as Property
+  editor.openEdit(merged)
+}
 async function pickStatus(s: PropertyStatus) {
   statusOpen.value = false
   if (!p.value || p.value.status === s) return
@@ -148,6 +187,17 @@ async function remove() {
       </div>
     </div>
 
+    <button v-if="duplicates.length" type="button" class="dup-banner" @click="dupOpen = true">
+      <UiIcon name="warn" :size="18" /> Puede que ya la tengáis: {{ duplicates.length }} {{ duplicates.length === 1 ? 'casa parecida' : 'casas parecidas' }}. Toca para comparar.
+    </button>
+
+    <div v-if="p.raw_text && (p.m2 == null || p.rooms == null)" class="card flat row between">
+      <span class="tiny grow">Esta casa llegó con texto. El lector puede rellenar los datos que faltan.</span>
+      <button type="button" class="secondary small" @click="fillFromText">Rellenar desde el texto</button>
+    </div>
+
+    <FitCard :property="p" :has-criteria="!!data.criteria.value" />
+
     <div class="card">
       <h2>Fotos</h2>
       <PhotoStrip :photos="photos" :url-of="data.photoUrl" :busy="uploading" style="margin-top: 0.6rem" @add="addPhotos" @remove="removePhoto" @open="viewing = $event" />
@@ -194,6 +244,19 @@ async function remove() {
     </div>
 
     <StatusPicker v-if="statusOpen" :current="p.status" @pick="pickStatus" @close="statusOpen = false" />
+    <Sheet v-if="dupOpen" title="¿Es la misma casa?" @close="dupOpen = false">
+      <p class="muted">Se parecen por referencia, enlace, dirección y planta, o por estar a menos de 30 m con metros y precio parecidos. Si es la misma, fusiónala: esta ficha se queda y absorbe a la otra.</p>
+      <ul class="list">
+        <li v-for="d in duplicates" :key="d.id">
+          <div class="grow">
+            <div style="font-weight: 600">{{ d.title }}</div>
+            <div class="tiny">{{ [d.price != null ? formatEur(d.price) : null, d.m2 != null ? formatM2(d.m2) : null, d.address ?? d.neighborhood].filter(Boolean).join(' · ') }} · {{ SOURCE_LABELS[d.source] }}</div>
+          </div>
+          <router-link :to="{ name: 'property', params: { id: d.id } }" class="btn ghost small" @click="dupOpen = false">Ver</router-link>
+          <button type="button" class="small" @click="merge(d)"><UiIcon name="merge" :size="16" /> Fusionar</button>
+        </li>
+      </ul>
+    </Sheet>
     <div v-if="viewing" class="photo-view" @click="viewing = null"><img :src="data.photoUrl(viewing)" alt="" /></div>
   </div>
 </template>
@@ -201,5 +264,6 @@ async function remove() {
 <style>
 .prop .back-link { align-self: flex-start; padding-left: 0; }
 .prop-map { height: 180px; z-index: 0; }
+.dup-banner { width: 100%; justify-content: flex-start; text-align: left; background: var(--warn-soft); color: var(--warn); border-color: transparent; border-radius: var(--r-md); padding: 0.6rem 0.9rem; font-size: 0.88rem; }
 .status-btn { background: transparent; border-color: transparent; padding: 0.2rem 0.3rem; color: var(--ink-3); gap: 0.2rem; }
 </style>

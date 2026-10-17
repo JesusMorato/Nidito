@@ -50,8 +50,10 @@ async function saveProperty(input: PropertyInput) {
   if (editor.state.saving) return
   editor.state.saving = true
   const editing = !!input.id
+  const before = input.id ? data.byId.value[input.id]?.price ?? null : null
   try {
     const id = await data.saveProperty(input)
+    if (editing && before != null && input.price != null && input.price < before) data.notifyPartner('precio', id, { old_price: before })
     editor.state.saving = false
     editor.close()
     toast(editing ? 'Casa actualizada' : 'Casa guardada')

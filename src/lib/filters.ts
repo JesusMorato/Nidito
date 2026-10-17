@@ -4,7 +4,7 @@
 import type { Extras, Property, PropertyStatus, PropertySource } from '../types'
 import { pricePerM2 } from './format'
 
-export type SortKey = 'nota' | 'mi_nota' | 'desacuerdo' | 'precio' | 'precio_m2' | 'm2' | 'fecha' | 'metro'
+export type SortKey = 'nota' | 'mi_nota' | 'desacuerdo' | 'encaje' | 'precio' | 'precio_m2' | 'm2' | 'fecha' | 'metro'
 export type SortDir = 'asc' | 'desc'
 
 export const SORT_OPTIONS: Array<{ value: SortKey; label: string; defaultDir: SortDir }> = [
@@ -12,6 +12,7 @@ export const SORT_OPTIONS: Array<{ value: SortKey; label: string; defaultDir: So
   { value: 'nota', label: 'Nota conjunta', defaultDir: 'desc' },
   { value: 'mi_nota', label: 'Mi nota', defaultDir: 'desc' },
   { value: 'desacuerdo', label: 'Más desacuerdo', defaultDir: 'desc' },
+  { value: 'encaje', label: 'Encaje con los criterios', defaultDir: 'desc' },
   { value: 'precio', label: 'Precio', defaultDir: 'asc' },
   { value: 'precio_m2', label: '€/m²', defaultDir: 'asc' },
   { value: 'm2', label: 'Metros', defaultDir: 'desc' },
@@ -99,6 +100,7 @@ function sortValue(p: Property, key: SortKey, s: PropertyScores | undefined): nu
     case 'nota': return s?.joint ?? null
     case 'mi_nota': return s?.mine ?? null
     case 'desacuerdo': return s?.disagreement ?? null
+    case 'encaje': return p.fit_score
     case 'metro': return s?.metroMinutes ?? null
   }
 }

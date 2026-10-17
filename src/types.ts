@@ -104,10 +104,23 @@ export interface Property {
   cadastral_ref: string | null
   status: PropertyStatus
   merged_into: string | null
+  /** Encaje con los criterios del hogar (fase 3); null si no hay criterios. */
+  fit_score: number | null
+  fit_notes: FitNotes | null
+  in_zone: string | null
+  /** Lo automático pasa por la bandeja; lo vuestro entra directo. */
+  inbox: 'bandeja' | 'aceptada' | 'descartada'
+  discard_reason: string | null
+}
+
+export interface FitNotes {
+  fail: string[]
+  ok: string[]
+  missing: string[]
 }
 
 /** Lo que se manda a save_property: la ficha sin los campos que pone el servidor. */
-export type PropertyInput = Partial<Omit<Property, 'household_id' | 'created_by' | 'created_at' | 'updated_at' | 'merged_into'>> & { title: string }
+export type PropertyInput = Partial<Omit<Property, 'household_id' | 'created_by' | 'created_at' | 'updated_at' | 'merged_into' | 'fit_score' | 'fit_notes' | 'in_zone' | 'inbox' | 'discard_reason'>> & { title: string }
 
 export interface PriceEntry {
   id: string
@@ -171,4 +184,38 @@ export interface PushSubscriptionRow {
   p256dh: string
   auth: string
   aparato: string
+}
+
+// ---------- fase 3: criterios, zonas y enlaces ----------
+
+export interface Criteria {
+  household_id: string
+  max_price: number | null
+  min_m2: number | null
+  min_rooms: number | null
+  min_baths: number | null
+  types: PropertyType[]
+  /** Imprescindibles: { ascensor: true, exterior: true } */
+  must: Record<string, boolean>
+  /** Preferencias con puntos 1–3: { terraza: 2 } */
+  prefs: Record<string, number>
+  require_zone: boolean
+  updated_at?: string
+}
+
+export interface Zone {
+  id: string
+  household_id: string
+  name: string
+  color: string
+  /** [[lat, lng], …] */
+  polygon: Array<[number, number]>
+  created_at: string
+}
+
+export interface IngestToken {
+  user_id: string
+  household_id: string
+  token: string
+  created_at: string
 }
