@@ -1,0 +1,32 @@
+# El plan gratuito de Supabase pausa el proyecto tras ~7 días sin actividad.
+# Esta consulta trivial cada 3 días cuenta como actividad y lo mantiene despierto.
+# Usa la URL y la clave pública (anon) de .env, que no son secretas.
+# Mientras .env esté vacío (proyecto aún no creado) avisa y termina en verde.
+name: Keepalive Supabase
+
+on:
+  schedule:
+    - cron: '41 6 */3 * *'   # cada 3 días a las 06:41 UTC
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Consulta trivial a Supabase
+        run: |
+          url=$(grep '^VITE_SUPABASE_URL=' .env | cut -d= -f2-)
+          key=$(grep '^VITE_SUPABASE_ANON_KEY=' .env | cut -d= -f2-)
+          if [ -z "$url" ] || [ -z "$key" ]; then
+            echo "::warning title=Sin configurar::.env no tiene la URL ni la clave de Supabase todavía. No hay nada que mantener despierto."
+            exit 0
+          fi
+          code=$(curl -s -o /tmp/body -w '%{http_code}' \
+            "$url/rest/v1/households?select=id&limit=1" \
+            -H "apikey: $key" \
+            -H "Authorization: Bearer $key")
+          echo "HTTP $code"; cat /tmp/body; echo
+          # 200 = vivo (RLS devuelve lista vacía para anon, es lo esperado)
+          [ "$code" = "200" ]
