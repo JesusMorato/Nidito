@@ -5,7 +5,6 @@
 -- varias veces sin romper nada. Las tablas de casas llegan en la fase 1.
 -- ============================================================
 
-create extension if not exists pgcrypto;
 
 -- Registro de migraciones aplicadas (lo usa el workflow de GitHub)
 create table if not exists public.schema_migrations (
