@@ -36,7 +36,7 @@ const editor = useEditor()
 const { confirm } = useConfirm()
 const { toast } = useToast()
 
-onMounted(() => data.ensureLoaded(session.household?.id))
+onMounted(() => data.ensureLoaded(session.household?.id, session.user?.id))
 
 const id = computed(() => String(route.params.id))
 const p = computed(() => data.byId.value[id.value] ?? null)

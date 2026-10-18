@@ -17,7 +17,7 @@ const { state: session } = useSession()
 const data = useData()
 const { toast } = useToast()
 
-onMounted(() => data.ensureLoaded(session.household?.id))
+onMounted(() => data.ensureLoaded(session.household?.id, session.user?.id))
 
 const showDiscarded = ref(false)
 const showMail = ref(false)

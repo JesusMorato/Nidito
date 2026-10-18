@@ -4,8 +4,9 @@
 // añadido, la han valorado, la han comentado o ha bajado de precio. La llama la
 // propia app justo después de guardar.
 //
-// Quien llama va identificado por su sesión (Supabase comprueba el token antes
-// de llegar aquí), así que solo se puede avisar de casas del propio hogar.
+// Quien llama va identificado por su sesión: Supabase comprueba el token antes de
+// llegar aquí (verify_jwt) y la función lo vuelve a comprobar con Auth por si acaso,
+// así que solo se puede avisar de casas del propio hogar.
 //
 // Con { prueba: true } no avisa a nadie más: se manda el aviso a los aparatos de
 // quien llama y devuelve qué ha contestado el servicio de avisos.
@@ -13,10 +14,11 @@
 // El envío es Web Push estándar, hecho a mano con WebCrypto (webpush.ts, probado
 // con Vitest). Copiado de GasTitos.
 // ============================================================
-import { b64urlABytes, cabeceraVapid, cifrar } from './webpush.ts'
+import { cabeceraVapid, cifrar } from './webpush.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
 
 interface Config {
   publica: string
@@ -105,17 +107,26 @@ async function enviar(s: Suscripcion, mensaje: string, cfg: Config): Promise<Res
   }
 }
 
-function usuarioDelToken(cabecera: string | null): string | null {
-  const token = (cabecera ?? '').replace(/^Bearer\s+/i, '')
-  const partes = token.split('.')
-  if (partes.length !== 3) return null
+/**
+ * Quién llama, comprobado de verdad: se le pide a Supabase Auth que valide el token
+ * (firma y caducidad). Así la función no depende solo del verify_jwt de la plataforma.
+ */
+async function usuarioDelToken(cabecera: string | null): Promise<string | null> {
+  const token = (cabecera ?? '').replace(/^Bearer\s+/i, '').trim()
+  if (token.split('.').length !== 3) return null
   try {
-    const carga = JSON.parse(new TextDecoder().decode(b64urlABytes(partes[1])))
-    return typeof carga.sub === 'string' ? carga.sub : null
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: ANON_KEY || SERVICE_KEY, Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) return null
+    const u = (await res.json()) as { id?: unknown }
+    return typeof u.id === 'string' && ES_UUID.test(u.id) ? u.id : null
   } catch {
     return null
   }
 }
+
+const ES_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
 
@@ -135,7 +146,7 @@ Deno.serve(async (req) => {
     new Response(JSON.stringify(cuerpo), { status, headers: { ...CORS, 'Content-Type': 'application/json' } })
 
   try {
-    const quien = usuarioDelToken(req.headers.get('Authorization'))
+    const quien = await usuarioDelToken(req.headers.get('Authorization'))
     if (!quien) return json({ error: 'Sin sesión' }, 401)
 
     const peticion = (await req.json().catch(() => ({}))) as { kind?: unknown; property_id?: unknown; text?: unknown; old_price?: unknown; prueba?: unknown }
@@ -159,7 +170,7 @@ Deno.serve(async (req) => {
 
     const kind = peticion.kind as Kind
     const propertyId = peticion.property_id
-    if (!['casa', 'valoracion', 'comentario', 'precio'].includes(kind) || typeof propertyId !== 'string' || !propertyId) {
+    if (!['casa', 'valoracion', 'comentario', 'precio'].includes(kind) || typeof propertyId !== 'string' || !ES_UUID.test(propertyId)) {
       return json({ error: 'Faltan kind o property_id' }, 400)
     }
 
@@ -219,7 +230,8 @@ Deno.serve(async (req) => {
 
     return json({ estado: 'ok', enviados: resultados.filter((r) => r.codigo >= 200 && r.codigo < 300).length, resultados })
   } catch (e) {
+    // El detalle (rutas internas, texto de Postgres) va al registro, no al que llama.
     console.error((e as Error).message)
-    return json({ error: (e as Error).message }, 500)
+    return json({ error: 'Error interno' }, 500)
   }
 })

@@ -168,7 +168,7 @@ onMounted(async () => {
     }
     selected.value = null
   })
-  await data.ensureLoaded(session.household?.id)
+  await data.ensureLoaded(session.household?.id, session.user?.id)
   draw()
   drawZones()
   if (!fittedOnce && withPin.value.length) {

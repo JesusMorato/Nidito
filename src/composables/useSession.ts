@@ -5,6 +5,7 @@ import type { Session, User } from '@supabase/supabase-js'
 import { supabase, authRedirectUrl } from '../supabase'
 import type { Household, Member } from '../types'
 import { clearSnapshots, isNetworkError, loadSnapshot, saveSnapshot } from '../lib/offline'
+import { resetData } from './useData'
 
 interface State {
   ready: boolean
@@ -63,6 +64,8 @@ let syncing: Promise<void> | null = null
 function applySession(session: Session | null): Promise<void> {
   const p = (async () => {
     const user = session?.user ?? null
+    // Otro usuario (o nadie) en el mismo navegador: fuera los datos del anterior.
+    if (state.user && state.user.id !== user?.id) resetData()
     const r = await fetchHousehold(user)
     state.user = user
     state.household = r.household
@@ -102,6 +105,7 @@ export function useSession() {
 
   async function signOut() {
     clearSnapshots()
+    resetData()
     await supabase.auth.signOut()
     state.user = null
     state.household = null

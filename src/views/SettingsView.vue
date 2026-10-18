@@ -25,7 +25,7 @@ const { toast } = useToast()
 const push = usePush()
 
 onMounted(() => {
-  data.ensureLoaded(state.household?.id)
+  data.ensureLoaded(state.household?.id, state.user?.id)
   push.comprobar()
 })
 

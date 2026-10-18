@@ -66,6 +66,13 @@ GitHub Actions.
   insert/update directos (no hay política que lo permita): es la única puerta, apunta el
   historial de precio y aplica los criterios. `_save_property` es la pieza interna que
   también usan `register_link` (atajo) e `ingest_email` (correo).
+- Todo lo que llega de fuera (correo, atajo, lo que devuelve el modelo) es entrada NO
+  confiable: se comprueba el código secreto antes de hacer nada, solo pasan campos
+  conocidos y bien tipados (`sanitise` en `ingest-email`), y la base de datos ignora
+  `id`/`status`/`inbox` de esas fichas. Los mensajes de error internos van al registro de
+  la función, no a quien llama.
+- `useData.ensureLoaded(hid, uid)` va por hogar Y usuario; `resetData()` vacía todo al
+  cerrar sesión o cambiar de usuario (el modo a ciegas no se filtra por compartir móvil).
 - El lector de texto (`src/lib/parseListing.ts`) tiene una COPIA en
   `supabase/functions/ingest-email/parseListing.ts`; un test comprueba que son idénticas.
   Si cambias uno, copia el otro.

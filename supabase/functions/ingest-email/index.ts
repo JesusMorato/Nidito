@@ -13,10 +13,16 @@
 //      (una sola ficha) y, si no encuentra ni precio ni metros, el correo se ignora.
 //
 // No lleva verify_jwt: el Apps Script no tiene sesión. El código secreto del cuerpo es
-// lo que identifica a la persona; sin él, ingest_email falla y no se guarda nada.
+// lo que identifica a la persona. Se comprueba ANTES de leer nada (ingest_token_valid),
+// para que nadie pueda gastar llamadas al modelo con un código inventado; además se
+// exige la clave pública de Supabase en la cabecera apikey (el Apps Script la manda).
+//
+// El contenido del correo es entrada NO confiable: de lo que devuelve el modelo solo se
+// pasan los campos conocidos, con sus tipos (sanitise), y la base de datos ignora
+// id/status/inbox aunque llegaran.
 // ============================================================
 import { parseListing } from './parseListing.ts'
-import type { PropertyInput } from './types.ts'
+import type { Extras, PropertyInput, PropertyType } from './types.ts'
 
 // Las variables se leen así para que el archivo también cargue en Vitest (Node), donde
 // no existe Deno: ahí solo se prueban las funciones puras.
@@ -24,8 +30,11 @@ declare const Deno: { env: { get(k: string): string | undefined }; serve(h: (req
 const env = (k: string) => (typeof Deno === 'undefined' ? '' : Deno.env.get(k) ?? '')
 const SUPABASE_URL = env('SUPABASE_URL')
 const SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY')
+const ANON_KEY = env('SUPABASE_ANON_KEY')
 const ANTHROPIC_KEY = env('ANTHROPIC_API_KEY')
 const ANTHROPIC_MODEL = env('ANTHROPIC_MODEL') || 'claude-haiku-5-5'
+/** Tope de texto que se lee de un correo (los de portales rondan los 10-20k). */
+const MAX_TEXT = 60_000
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -88,6 +97,71 @@ function hasData(p: PropertyInput): boolean {
   return p.price != null || p.m2 != null
 }
 
+// ---------- limpieza de lo que devuelve el modelo ----------
+const TYPES: PropertyType[] = ['piso', 'atico', 'bajo', 'duplex', 'estudio', 'chalet', 'otro']
+const BOOL_EXTRAS = ['ascensor', 'terraza', 'garaje', 'trastero', 'piscina', 'calefaccion', 'aire'] as const
+
+function str(v: unknown, max: number): string | null {
+  if (typeof v !== 'string') return null
+  const s = v.trim()
+  return s ? s.slice(0, max) : null
+}
+function int(v: unknown, min: number, max: number): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v.replace(/\./g, '').replace(',', '.')) : NaN
+  if (!Number.isFinite(n)) return null
+  const r = Math.round(n)
+  return r >= min && r <= max ? r : null
+}
+function dec(v: unknown, max: number): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v.replace(',', '.')) : NaN
+  return Number.isFinite(n) && n >= 0 && n <= max ? Math.round(n * 100) / 100 : null
+}
+
+/**
+ * Deja una ficha solo con los campos conocidos y bien tipados. Lo que no encaja se
+ * descarta (null), nunca rompe. Devuelve null si no hay título.
+ */
+export function sanitise(raw: unknown): PropertyInput | null {
+  if (!raw || typeof raw !== 'object') return null
+  const c = raw as Record<string, unknown>
+  const title = str(c.title, 120)
+  if (!title) return null
+  const extras: Extras = {}
+  if (c.extras && typeof c.extras === 'object') {
+    const e = c.extras as Record<string, unknown>
+    for (const k of BOOL_EXTRAS) if (typeof e[k] === 'boolean') extras[k] = e[k] as boolean
+    const ori = str(e.orientacion, 20)
+    if (ori) extras.orientacion = ori.toLowerCase()
+    const cert = str(e.certificado, 1)
+    if (cert && /^[A-G]$/i.test(cert)) extras.certificado = cert.toUpperCase()
+  }
+  const type = typeof c.type === 'string' && (TYPES as string[]).includes(c.type) ? (c.type as PropertyType) : undefined
+  const url = str(c.url, 500)
+  return {
+    title,
+    address: str(c.address, 200),
+    neighborhood: str(c.neighborhood, 100),
+    lat: typeof c.lat === 'number' && Math.abs(c.lat) <= 90 ? c.lat : null,
+    lng: typeof c.lng === 'number' && Math.abs(c.lng) <= 180 ? c.lng : null,
+    price: int(c.price, 1, 50_000_000),
+    m2: int(c.m2, 1, 10_000),
+    m2_useful: int(c.m2_useful, 1, 10_000),
+    rooms: int(c.rooms, 0, 50),
+    baths: int(c.baths, 0, 50),
+    floor: str(c.floor, 20),
+    type,
+    exterior: typeof c.exterior === 'boolean' ? c.exterior : null,
+    extras,
+    community_fee: dec(c.community_fee, 10_000),
+    ibi: dec(c.ibi, 100_000),
+    url: url && /^https?:\/\//i.test(url) ? url : null,
+    agency: str(c.agency, 120),
+    contact: str(c.contact, 120),
+    external_ref: str(c.external_ref, 80),
+    notes: str(c.notes, 2000),
+  }
+}
+
 // ---------- Claude para correos de inmobiliarias ----------
 async function readWithClaude(text: string, subject: string): Promise<PropertyInput[] | null> {
   if (!ANTHROPIC_KEY) return null
@@ -109,8 +183,9 @@ ${text.slice(0, 12000)}`
   const raw = (data.content ?? []).map((c: { text?: string }) => c.text ?? '').join('')
   const json = raw.match(/\{[\s\S]*\}/)?.[0]
   if (!json) return []
-  const parsed = JSON.parse(json) as { casas?: PropertyInput[] }
-  return (parsed.casas ?? []).filter((c) => c && typeof c === 'object' && c.title).map((c) => ({ ...c, title: String(c.title).slice(0, 120) }))
+  const parsed = JSON.parse(json) as { casas?: unknown }
+  const casas = Array.isArray(parsed.casas) ? parsed.casas : []
+  return casas.slice(0, 30).map(sanitise).filter((c): c is PropertyInput => c !== null)
 }
 
 // ---------- lectura ----------
@@ -152,39 +227,56 @@ if (typeof Deno !== 'undefined') {
     if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
     const json = (cuerpo: unknown, status = 200) =>
       new Response(JSON.stringify(cuerpo), { status, headers: { ...CORS, 'Content-Type': 'application/json' } })
+    if (req.method !== 'POST') return json({ error: 'Solo POST' }, 405)
+    // La clave pública de Supabase tiene que venir en la cabecera (como en cualquier
+    // llamada a la API). No es secreta, pero frena las llamadas de paso.
+    if (ANON_KEY && req.headers.get('apikey') !== ANON_KEY) return json({ error: 'Falta la clave de la API' }, 401)
     try {
       const m = (await req.json().catch(() => ({}))) as Incoming
-      if (!m.token || !m.message_id) return json({ error: 'Faltan token o message_id' }, 400)
-      const text = (m.body_text && m.body_text.trim()) || (m.body_html ? htmlToText(m.body_html) : '')
-      const from = m.from ?? ''
-      const subject = m.subject ?? ''
+      const token = typeof m.token === 'string' ? m.token.trim() : ''
+      const messageId = typeof m.message_id === 'string' ? m.message_id.trim().slice(0, 200) : ''
+      if (!token || !messageId) return json({ error: 'Faltan token o message_id' }, 400)
+
+      // 1 · el código secreto, antes de leer nada
+      const valido = await rpc('ingest_token_valid', { p_token: token })
+      if (valido !== true) return json({ error: 'Código no válido' }, 403)
+
+      // 2 · el texto del correo (con tope)
+      const text = ((typeof m.body_text === 'string' && m.body_text.trim()) || (typeof m.body_html === 'string' ? htmlToText(m.body_html.slice(0, MAX_TEXT * 4)) : '')).slice(0, MAX_TEXT)
+      const from = typeof m.from === 'string' ? m.from.slice(0, 300) : ''
+      const subject = typeof m.subject === 'string' ? m.subject.slice(0, 500) : ''
+      const receivedAt = typeof m.received_at === 'string' ? m.received_at.slice(0, 40) : null
+
+      // 3 · las casas
       let properties: PropertyInput[] = []
-      let how = ''
       let status = 'done'
       let detail: string | null = null
       try {
         const r = await extractProperties(from, subject, text)
         properties = r.properties
-        how = r.how
         if (!properties.length) {
           status = 'ignored'
           detail = 'Sin casas reconocibles'
         } else {
-          detail = `${properties.length} ${properties.length === 1 ? 'casa' : 'casas'} (${how})`
+          detail = `${properties.length} ${properties.length === 1 ? 'casa' : 'casas'} (${r.how})`
         }
       } catch (e) {
+        console.error('lectura', (e as Error).message)
         status = 'error'
-        detail = (e as Error).message
+        detail = 'No se ha podido leer el correo'
       }
+
+      // 4 · a la base de datos (ingest_email ignora id/status/inbox y guarda casa a casa)
       const result = await rpc('ingest_email', {
-        p_token: m.token,
-        p_message: { message_id: m.message_id, from, subject, received_at: m.received_at ?? null, body: text, status, detail },
+        p_token: token,
+        p_message: { message_id: messageId, from, subject, received_at: receivedAt, body: text.slice(0, 20_000), status, detail },
         p_properties: properties,
       })
-      return json({ estado: status, detalle: detail, resultado: result })
+      return json({ estado: result?.estado ?? status, detalle: detail, resultado: result })
     } catch (e) {
+      // El detalle (texto de Postgres, rutas internas) va al registro, no al que llama.
       console.error((e as Error).message)
-      return json({ error: (e as Error).message }, /no válido/.test((e as Error).message) ? 403 : 500)
+      return json({ error: 'Error interno' }, 500)
     }
   })
 }

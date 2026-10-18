@@ -36,6 +36,7 @@ function enviarCorreosNuevos() {
   var enviados = 0
   for (var i = 0; i < hilos.length; i++) {
     var mensajes = hilos[i].getMessages()
+    var fallos = 0
     for (var j = 0; j < mensajes.length; j++) {
       var m = mensajes[j]
       // Los hilos que ya tienen "Nidito/Enviado" solo mandan los mensajes nuevos: se
@@ -63,10 +64,13 @@ function enviarCorreosNuevos() {
         PropertiesService.getUserProperties().setProperty(clave, '1')
         enviados++
       } else {
+        fallos++
         console.error('Nidito ' + codigo + ': ' + res.getContentText().slice(0, 300))
       }
     }
-    hilos[i].addLabel(hecho).removeLabel(pendiente)
+    // Si algún mensaje no ha llegado, el hilo se queda en "Nidito" y se reintenta en la
+    // siguiente pasada (los que sí llegaron no se repiten: quedan apuntados por id).
+    if (fallos === 0) hilos[i].addLabel(hecho).removeLabel(pendiente)
   }
   console.log('Nidito: ' + enviados + ' correo(s) enviado(s)')
 }

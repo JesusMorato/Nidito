@@ -8,7 +8,10 @@ import { isNetworkError, loadSnapshot, saveSnapshot } from '../lib/offline'
 import { resizeImage } from '../lib/resizeImage'
 
 interface State {
+  /** Hogar cuyos datos están cargados (null = nada cargado). */
   loadedFor: string | null
+  /** Usuario para el que se cargaron: si entra otro en el mismo navegador, se vacía todo. */
+  loadedUser: string | null
   loadedAt: number
   loading: boolean
   properties: Property[]
@@ -27,7 +30,18 @@ interface State {
   zoneNotes: ZoneNote[]
 }
 
-const state = reactive<State>({ loadedFor: null, loadedAt: 0, loading: false, properties: [], photos: [], prices: [], aspects: [], ratings: [], reactions: [], comments: [], criteria: null, zones: [], inbound: [], places: [], visits: [], contacts: [], zoneNotes: [] })
+const EMPTY: State = { loadedFor: null, loadedUser: null, loadedAt: 0, loading: false, properties: [], photos: [], prices: [], aspects: [], ratings: [], reactions: [], comments: [], criteria: null, zones: [], inbound: [], places: [], visits: [], contacts: [], zoneNotes: [] }
+const state = reactive<State>(structuredClone(EMPTY))
+
+/**
+ * Vacía todo lo cargado. Se llama al cerrar sesión o cuando entra otro usuario en el
+ * mismo navegador: así nadie ve (ni un instante) las valoraciones a ciegas del otro.
+ */
+export function resetData() {
+  Object.assign(state, structuredClone(EMPTY))
+  for (const k of Object.keys(photoUrls)) delete photoUrls[k]
+  offline.value = false
+}
 /** true mientras enseñamos la copia local porque el servidor no responde. */
 const offline = ref(false)
 /** URLs firmadas de las fotos (el cubo es privado), por ruta. Caducan en una hora. */
@@ -45,7 +59,7 @@ function normalise(p: Record<string, unknown>): Property {
   }
 }
 
-async function fetchAll(hid: string) {
+async function fetchAll(hid: string, uid: string) {
   const [pr, ph, pc, as, ra, re, co, cr, zo, im, pl, vi, cl, zn] = await Promise.all([
     supabase.from('properties').select('*').order('created_at', { ascending: false }),
     supabase.from('photos').select('*').order('created_at', { ascending: true }),
@@ -79,22 +93,25 @@ async function fetchAll(hid: string) {
   state.contacts = (cl.data ?? []) as ContactEntry[]
   state.zoneNotes = (zn.data ?? []) as ZoneNote[]
   state.loadedFor = hid
+  state.loadedUser = uid
   state.loadedAt = Date.now()
   offline.value = false
+  // La copia local es por usuario Y hogar: lo que ve uno (a ciegas) no lo carga el otro.
   const snap: Snapshot = { properties: state.properties, photos: state.photos, prices: state.prices, aspects: state.aspects, ratings: state.ratings, reactions: state.reactions, comments: state.comments, criteria: state.criteria, zones: state.zones }
-  saveSnapshot(`datos:${hid}`, snap)
+  saveSnapshot(`datos:${uid}:${hid}`, snap)
 }
 
-async function load(hid: string) {
+async function load(hid: string, uid: string) {
   if (state.loading) return
   state.loading = true
   try {
-    await fetchAll(hid)
+    await fetchAll(hid, uid)
   } catch (e) {
-    const copy = loadSnapshot<Snapshot>(`datos:${hid}`)
+    const copy = loadSnapshot<Snapshot>(`datos:${uid}:${hid}`)
     if (isNetworkError(e) && copy) {
       Object.assign(state, copy.value)
       state.loadedFor = hid
+      state.loadedUser = uid
       offline.value = true
     } else {
       throw e
@@ -109,20 +126,23 @@ function fail(error: { message: string } | null) {
 }
 
 export function useData() {
-  /** Carga los datos del hogar si aún no están (o son de otro hogar). */
-  async function ensureLoaded(hid: string | undefined) {
-    if (!hid) return
-    if (state.loadedFor !== hid) await load(hid)
+  /** Carga los datos del hogar si aún no están (o son de otro hogar o de otro usuario). */
+  async function ensureLoaded(hid: string | undefined, uid: string | undefined) {
+    if (!hid || !uid) return
+    if (state.loadedFor !== hid || state.loadedUser !== uid) {
+      if (state.loadedFor) resetData()
+      await load(hid, uid)
+    }
   }
 
   /** Recarga si los datos tienen más de `maxAgeMs` (por defecto, un minuto). */
   async function refreshIfStale(maxAgeMs = 60_000) {
-    if (!state.loadedFor) return
-    if (Date.now() - state.loadedAt > maxAgeMs) await load(state.loadedFor)
+    if (!state.loadedFor || !state.loadedUser) return
+    if (Date.now() - state.loadedAt > maxAgeMs) await load(state.loadedFor, state.loadedUser)
   }
 
   async function refresh() {
-    if (state.loadedFor) await load(state.loadedFor)
+    if (state.loadedFor && state.loadedUser) await load(state.loadedFor, state.loadedUser)
   }
 
   const properties = computed(() => state.properties)

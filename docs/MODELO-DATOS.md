@@ -52,7 +52,9 @@ aceptado), `discard_reason`, `fit_score` 0–100, `fit_notes` (`fail`, `ok`, `mi
 | `apply_criteria`, `reapply_criteria` | `save_property` / App | Nota de encaje, motivos y zona |
 | `find_duplicates`, `merge_properties` | App | Posibles duplicados y fusión |
 | `register_link(token, url, title, text)` | Atajo del iPhone (clave anon) | Crea la casa a nombre del dueño del código; si ya existía, apunta el precio |
-| `ingest_email(token, message, properties)` | Función `ingest-email` (clave de servicio) | Guarda el correo y crea las casas con `source = correo` |
+| `ingest_email(token, message, properties)` | Función `ingest-email` (clave de servicio) | Guarda el correo (siempre, también si falla) y crea las casas con `source = correo`, una a una; ignora `id`, `status` e `inbox` de lo que traiga el correo |
+| `ingest_token_valid(token)` | Función `ingest-email` (clave de servicio) | Comprueba el código secreto antes de leer el correo |
+| `clean_url(text)` | `_save_property`, `register_link` | Solo enlaces http(s); completa `www.…`; lo demás, null |
 | `point_in_polygon`, `distance_m` | SQL | Geometría sin PostGIS |
 | `property_in_my_household`, `can_see_partner_ratings`, `zone_in_my_household` | Políticas RLS | Ayudas security definer para no recursar |
 

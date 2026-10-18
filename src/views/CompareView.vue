@@ -14,7 +14,7 @@ const route = useRoute()
 const router = useRouter()
 const { state: session, partner } = useSession()
 const data = useData()
-onMounted(() => data.ensureLoaded(session.household?.id))
+onMounted(() => data.ensureLoaded(session.household?.id, session.user?.id))
 
 const ids = computed(() => String(route.query.ids ?? '').split(',').filter(Boolean).slice(0, 3))
 const items = computed(() => ids.value.map((id) => data.byId.value[id]).filter((p): p is Property => !!p))

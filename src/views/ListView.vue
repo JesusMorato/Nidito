@@ -31,7 +31,7 @@ const data = useData()
 const { state: fs } = useFilters()
 const { visible, scores, allNeighborhoods } = useVisible()
 
-onMounted(() => data.ensureLoaded(session.household?.id))
+onMounted(() => data.ensureLoaded(session.household?.id, session.user?.id))
 
 const hasRatings = computed(() => Object.values(scores.value).some((s) => s.joint != null))
 const filterCount = computed(() => activeFilterCount(fs.filters))

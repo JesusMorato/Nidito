@@ -1,6 +1,7 @@
 // Apoyo para funcionar sin conexión: estado de la red y copia local de los datos.
-// La copia vive en localStorage, por usuario, y solo se usa cuando no se puede
-// pedir nada al servidor. Nunca se guarda nada de otro usuario.
+// La copia vive en localStorage con una clave por usuario (y hogar), y solo se usa
+// cuando no se puede pedir nada al servidor. Al cerrar sesión se borran todas: lo que
+// uno ve a ciegas no lo carga el otro.
 import { ref } from 'vue'
 
 export const online = ref(typeof navigator === 'undefined' ? true : navigator.onLine)

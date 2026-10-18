@@ -52,12 +52,14 @@ async function setup() {
     do $$ begin
       if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
       if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+      -- La clave de servicio (la usan las funciones de Supabase): se salta RLS, como en Supabase.
+      if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
     end $$;
-    grant usage on schema public to anon, authenticated;
-    grant usage on schema auth to anon, authenticated;
-    alter default privileges in schema public grant all on tables to anon, authenticated;
-    alter default privileges in schema public grant all on sequences to anon, authenticated;
-    alter default privileges in schema public grant execute on functions to anon, authenticated;
+    grant usage on schema public to anon, authenticated, service_role;
+    grant usage on schema auth to anon, authenticated, service_role;
+    alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+    alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+    alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;
   `)
 }
 
@@ -68,6 +70,16 @@ async function as(userId, fn) {
     return await fn()
   } finally {
     await db.exec(`reset role; select set_config('request.jwt.claim.sub', '', false);`)
+  }
+}
+
+/** Ejecuta fn como la clave de servicio (las funciones de Supabase), sin sesión. */
+async function asService(fn) {
+  await db.exec(`set role service_role; select set_config('request.jwt.claim.sub', '', false);`)
+  try {
+    return await fn()
+  } finally {
+    await db.exec(`reset role;`)
   }
 }
 
@@ -88,7 +100,7 @@ async function applyMigrations() {
     }
   }
   // Las tablas creadas por las migraciones tienen que ser accesibles para los roles.
-  await db.exec('grant all on all tables in schema public to anon, authenticated; grant all on all sequences in schema public to anon, authenticated;')
+  await db.exec('grant all on all tables in schema public to anon, authenticated, service_role; grant all on all sequences in schema public to anon, authenticated, service_role;')
 }
 
 // ---------- escenarios ----------
@@ -305,24 +317,24 @@ async function fase3() {
 
 async function fase4() {
   console.log('Fase 4 · correo y Bandeja')
-  // La función de Supabase llama a ingest_email con la clave de servicio (aquí: superusuario).
-  await expectError(() => sql(`select ingest_email('malo', '{"message_id":"m1"}', '[]')`), /no válido/, 'ingest_email con código malo')
-  const r1 = (await sql(`select ingest_email('tok-luis-1234567890', $1::jsonb, $2::jsonb) as r`, [
+  // La función de Supabase llama a ingest_email con la clave de servicio.
+  await asService(() => expectError(() => sql(`select ingest_email('malo', '{"message_id":"m1"}', '[]')`), /no válido/, 'ingest_email con código malo'))
+  const r1 = (await asService(() => sql(`select ingest_email('tok-luis-1234567890', $1::jsonb, $2::jsonb) as r`, [
     JSON.stringify({ message_id: 'msg-1', from: 'alertas@idealista.com', subject: 'Nuevas casas', body: 'texto' }),
     JSON.stringify([
       { title: 'Piso en Fuencarral, 3 hab', price: 350000, m2: 95, rooms: 3, lat: 40.5, lng: -3.69, extras: { ascensor: true }, url: 'https://www.idealista.com/inmueble/5001/' },
       { title: 'Piso caro', price: 700000, m2: 95, rooms: 3, lat: 40.5, lng: -3.69, extras: { ascensor: true } },
     ]),
-  ])).rows[0].r
+  ]))).rows[0].r
   check(r1.estado === 'done' && r1.casas.length === 2, 'un correo con dos casas crea dos fichas')
   const bandeja = await as(ANA, async () => (await sql(`select title, inbox, source from properties where id = any($1::uuid[]) order by title`, [r1.casas])).rows)
   check(bandeja.find((p) => p.title === 'Piso caro').inbox === 'descartada', 'la que incumple cae en Descartadas')
   check(bandeja.find((p) => p.title !== 'Piso caro').inbox === 'bandeja' && bandeja[0].source === 'correo', 'la que cumple cae en la Bandeja')
   // El mismo correo otra vez no repite.
-  const r2 = (await sql(`select ingest_email('tok-luis-1234567890', $1::jsonb, $2::jsonb) as r`, [JSON.stringify({ message_id: 'msg-1' }), '[]'])).rows[0].r
+  const r2 = (await asService(() => sql(`select ingest_email('tok-luis-1234567890', $1::jsonb, $2::jsonb) as r`, [JSON.stringify({ message_id: 'msg-1' }), '[]']))).rows[0].r
   check(r2.estado === 'repetido', 'un correo repetido no crea nada')
   // Un correo sin casas queda como ignorado.
-  const r3 = (await sql(`select ingest_email('tok-luis-1234567890', $1::jsonb, '[]'::jsonb) as r`, [JSON.stringify({ message_id: 'msg-2', subject: 'Hola' })])).rows[0].r
+  const r3 = (await asService(() => sql(`select ingest_email('tok-luis-1234567890', $1::jsonb, '[]'::jsonb) as r`, [JSON.stringify({ message_id: 'msg-2', subject: 'Hola' })]))).rows[0].r
   check(r3.estado === 'ignored', 'un correo sin casas se apunta como ignorado')
   const correos = await as(ANA, async () => (await sql(`select status from inbound_messages order by created_at`)).rows.map((r) => r.status))
   check(correos.join(',') === 'done,ignored', 'los dos ven los correos recibidos')
@@ -373,6 +385,105 @@ async function despues() {
   check((await as(OTRO, async () => (await sql(`select count(*)::int as n from zone_notes`)).rows[0].n)) === 0, 'un extraño no ve notas de barrio')
 }
 
+async function revision() {
+  console.log('Revisión · 0007 y escenarios de seguridad que faltaban')
+  const TOK = 'tok-luis-1234567890'
+
+  // --- 1 · extras a null = sin dato, no "no lo tiene" ---
+  const r = (await asService(() => sql(`select ingest_email($1, $2::jsonb, $3::jsonb) as r`, [TOK,
+    JSON.stringify({ message_id: 'rev-null' }),
+    JSON.stringify([{ title: 'Del correo con nulls', price: 300000, m2: 90, rooms: 3, lat: 40.5, lng: -3.69, extras: { ascensor: null, terraza: null } }]),
+  ]))).rows[0].r
+  let c = await as(ANA, async () => (await sql(`select inbox, fit_notes from properties where id = $1`, [r.casas[0]])).rows[0])
+  check(c.inbox === 'bandeja' && c.fit_notes.missing.includes('ascensor') && c.fit_notes.fail.length === 0, 'extras a null: va a la Bandeja como "falta dato", no a Descartadas')
+  const casaStr = await as(ANA, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Extras raros', price: 300000, extras: { ascensor: 'sí', terraza: 'true' } })])).rows[0].id)
+  c = await as(ANA, async () => (await sql(`select fit_notes from properties where id = $1`, [casaStr])).rows[0])
+  check(c.fit_notes.missing.includes('ascensor') && !c.fit_notes.ok.includes('terraza'), 'extras que no son booleanos no cuentan ni a favor ni en contra')
+
+  // --- 2 · clean_url ---
+  const urls = (await sql(`select clean_url('javascript:alert(1)') as a, clean_url('www.idealista.com/inmueble/1/') as b, clean_url(' https://x.es/p ') as c, clean_url('') as d`)).rows[0]
+  check(urls.a === null && urls.b === 'https://www.idealista.com/inmueble/1/' && urls.c === 'https://x.es/p' && urls.d === null, 'clean_url: solo http(s), completa dominios, descarta lo raro')
+  const conJs = await as(ANA, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Con enlace raro', url: 'javascript:alert(1)' })])).rows[0].id)
+  check((await sql(`select url from properties where id = $1`, [conJs])).rows[0].url === null, 'save_property no guarda enlaces que no sean http(s)')
+
+  // --- 3 · ingest_token_valid ---
+  const tv = await asService(async () => [(await sql(`select ingest_token_valid($1) as v`, [TOK])).rows[0].v, (await sql(`select ingest_token_valid('malo') as v`)).rows[0].v])
+  check(tv[0] === true && tv[1] === false, 'la clave de servicio comprueba códigos (ingest_token_valid)')
+  await as(ANA, () => expectError(() => sql(`select ingest_token_valid($1)`, [TOK]), /permission|denied/i, 'la app no puede comprobar códigos'))
+  await as(null, () => expectError(() => sql(`select ingest_token_valid($1)`, [TOK]), /permission|denied/i, 'anon no puede comprobar códigos'))
+
+  // --- 4 · ingest_email endurecida ---
+  const antes = (await sql(`select title, price, status from properties where id = $1`, [ctx.casa])).rows[0]
+  const inj = (await asService(() => sql(`select ingest_email($1, $2::jsonb, $3::jsonb) as r`, [TOK,
+    JSON.stringify({ message_id: 'rev-inj' }),
+    JSON.stringify([{ id: ctx.casa, title: 'Inyectado', status: 'descartada', inbox: 'aceptada', source: 'manual', price: 1 }]),
+  ]))).rows[0].r
+  const despuesInj = (await sql(`select title, price, status from properties where id = $1`, [ctx.casa])).rows[0]
+  check(JSON.stringify(antes) === JSON.stringify(despuesInj), 'un correo con "id" no toca la casa existente')
+  const creada = (await sql(`select inbox, source, status from properties where id = $1`, [inj.casas[0]])).rows[0]
+  check(inj.casas.length === 1 && creada.source === 'correo' && creada.status === 'nueva' && creada.inbox === 'bandeja', 'crea una casa nueva del correo e ignora status/inbox/source del correo')
+  const mixto = (await asService(() => sql(`select ingest_email($1, $2::jsonb, $3::jsonb) as r`, [TOK,
+    JSON.stringify({ message_id: 'rev-mixto', received_at: 'fecha rara' }),
+    JSON.stringify([{ title: 'Buena', price: 300000, m2: 90, rooms: 3, lat: 40.5, lng: -3.69, extras: { ascensor: true } }, { title: 'Mala', type: 'casa', price: 385000.5 }, 'basura']),
+  ]))).rows[0].r
+  check(mixto.estado === 'done' && mixto.casas.length === 1 && mixto.errores.length === 1, 'una ficha inválida no tira las demás')
+  let msg = (await sql(`select status, detail, received_at from inbound_messages where message_id = 'rev-mixto'`)).rows[0]
+  check(msg && msg.status === 'done' && /1 de 2 con error/.test(msg.detail) && msg.received_at instanceof Date, 'el correo queda apuntado con el detalle del error y fecha válida')
+  const todoMal = (await asService(() => sql(`select ingest_email($1, $2::jsonb, $3::jsonb) as r`, [TOK, JSON.stringify({ message_id: 'rev-mal' }), JSON.stringify([{ title: 'Mala', type: 'casa' }])]))).rows[0].r
+  msg = (await sql(`select status from inbound_messages where message_id = 'rev-mal'`)).rows[0]
+  check(todoMal.estado === 'error' && msg?.status === 'error', 'si todas fallan, el correo queda como error (y queda rastro)')
+
+  // --- 5 · register_link: el precio no es la cuota ---
+  const link = await as(null, async () => (await sql(`select register_link($1, 'https://www.fotocasa.es/vivienda/9/', 'Piso 385.000 €', 'Hipoteca desde 1.200 €/mes. Precio 385.000 € · 950 € al mes') as id`, [TOK])).rows[0].id)
+  check((await sql(`select price from properties where id = $1`, [link])).rows[0].price === 385000, 'register_link coge el precio, no la cuota de hipoteca')
+  await as(null, () => expectError(() => sql(`select register_link($1, 'javascript:x', 't', null)`, [TOK]), /Falta el enlace/, 'register_link rechaza enlaces que no sean http(s)'))
+
+  // --- 6 · merge_properties: visitas y contactos; sin cadenas ---
+  const dupV = await as(LUIS, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Con visita' })])).rows[0].id)
+  await as(LUIS, () => sql(`insert into visits (household_id, property_id, created_by) values ($1, $2, $3)`, [ctx.hid, dupV, LUIS]))
+  await as(LUIS, () => sql(`insert into contact_log (household_id, property_id, user_id, kind) values ($1, $2, $3, 'llamada')`, [ctx.hid, dupV, LUIS]))
+  await as(LUIS, () => sql(`select merge_properties($1, $2)`, [ctx.casa, dupV]))
+  const huerfanas = (await sql(`select (select count(*) from visits where property_id = $1) + (select count(*) from contact_log where property_id = $1) as n`, [dupV])).rows[0].n
+  check(Number(huerfanas) === 0, 'al fusionar, visitas y contactos pasan a la que se queda')
+  const otra = await as(LUIS, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Otra más' })])).rows[0].id)
+  await as(LUIS, () => expectError(() => sql(`select merge_properties($1, $2)`, [dupV, otra]), /ya está fusionada/, 'no se fusiona dentro de una casa ya fusionada'))
+
+  // --- 7 · join_household ---
+  await as(OTRO, () => expectError(() => sql(`select join_household($1, '  ')`, [ctx.code]), /nombre|dos miembros/, 'join_household sin nombre o con hogar lleno falla'))
+
+  // --- 8 · UPDATE no puede apuntar a casas de otro hogar ---
+  // Un segundo hogar con su casa, para tener una "casa ajena".
+  const hid2 = await as(OTRO, async () => (await sql(`select create_household('Otro hogar', 'Otro') as id`)).rows[0].id)
+  const ajena = await as(OTRO, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Casa ajena', price: 100000 })])).rows[0].id)
+  check(!!hid2 && !!ajena, 'un segundo hogar guarda su casa')
+  await as(ANA, () => expectError(() => sql(`update visits set property_id = $1 where property_id = $2`, [ajena, ctx.casa]), /policy|permission|denied/i, 'una visita no se puede apuntar a una casa ajena'))
+  await as(LUIS, () => expectError(() => sql(`update property_reactions set property_id = $1 where user_id = $2`, [ajena, LUIS]), /policy|permission|denied/i, 'una reacción no se puede apuntar a una casa ajena'))
+  await as(LUIS, () => expectError(() => sql(`update contact_log set property_id = $1 where user_id = $2`, [ajena, LUIS]), /policy|permission|denied/i, 'un contacto no se puede apuntar a una casa ajena'))
+  await as(ANA, () => expectError(() => sql(`select merge_properties($1, $2)`, [ctx.casa, ajena]), /hogar/, 'un miembro no fusiona una casa ajena con la suya'))
+  await as(OTRO, () => sql(`select set_property_status($1, 'descartada')`, [ctx.casa]))
+  check((await sql(`select status from properties where id = $1`, [ctx.casa])).rows[0].status !== 'descartada', 'un extraño no cambia el estado de vuestra casa')
+  const veOtro = await as(OTRO, async () => (await sql(`select count(*)::int as n from properties`)).rows[0].n)
+  check(veOtro === 1, 'el otro hogar solo ve su casa')
+
+  // --- 9 · funciones internas y escrituras directas ---
+  await as(ANA, () => expectError(() => sql(`select _save_property($1, $2, '{"title":"x"}')`, [ctx.hid, ANA]), /permission|denied/i, 'la app no llama a _save_property'))
+  await as(ANA, () => expectError(() => sql(`select apply_criteria($1)`, [ctx.casa]), /permission|denied/i, 'la app no llama a apply_criteria'))
+  await as(ANA, () => expectError(() => sql(`update properties set price = 1 where id = $1 returning 1`, [ctx.casa]).then((q) => { if (q.rows.length === 0) throw new Error('policy: 0 filas') }), /policy|permission|denied/i, 'update directo en properties rechazado'))
+  await as(ANA, () => expectError(() => sql(`insert into price_history (property_id, price, source) values ($1, 1, 'x')`, [ctx.casa]), /policy|permission|denied/i, 'insert directo en price_history rechazado'))
+  await as(ANA, () => expectError(() => sql(`insert into inbound_messages (household_id, user_id, message_id) values ($1, $2, 'x')`, [ctx.hid, ANA]), /policy|permission|denied/i, 'insert directo en inbound_messages rechazado'))
+  await as(ANA, () => expectError(() => sql(`insert into household_members (household_id, user_id, display_name) values ($1, $2, 'Colado')`, [hid2, ANA]), /policy|permission|denied|dos miembros|Ya perteneces/i, 'nadie se mete en un hogar por insert directo'))
+  // Las valoraciones del otro no se tocan.
+  const tocadas = await as(LUIS, async () => (await sql(`update ratings set stars = 1 where user_id = $1 returning 1`, [ANA])).rows.length)
+  const borradas = await as(LUIS, async () => (await sql(`delete from ratings where user_id = $1 returning 1`, [ANA])).rows.length)
+  check(tocadas === 0 && borradas === 0, 'Luis no modifica ni borra las valoraciones de Ana')
+  // A ciegas también esconde el comentario de la estrella (va en la misma fila).
+  const casaCiega = await as(ANA, async () => (await sql(`select save_property($1::jsonb) as id`, [JSON.stringify({ title: 'Ciega' })])).rows[0].id)
+  const luz = (await sql(`select id from rating_aspects where name = 'Luz' and household_id = $1`, [ctx.hid])).rows[0].id
+  await as(ANA, () => sql(`insert into ratings (property_id, user_id, aspect_id, stars, comment) values ($1, $2, $3, 5, 'secreto')`, [casaCiega, ANA, luz]))
+  const filtrado = await as(LUIS, async () => (await sql(`select count(*)::int as n from ratings where property_id = $1 and comment = 'secreto'`, [casaCiega])).rows[0].n)
+  check(filtrado === 0, 'a ciegas tampoco se ve el comentario de la estrella')
+}
+
 // ---------- ejecución ----------
 try {
   await setup()
@@ -384,6 +495,7 @@ try {
   await fase3()
   await fase4()
   await despues()
+  await revision()
 } catch (e) {
   console.error(e)
   fallos++

@@ -63,7 +63,21 @@ Cada persona lo monta en su cuenta. Son unos 10 minutos.
       de 10 minutos tiene que estar en la Bandeja o en Descartadas. Si no, en Apps Script
       → **Ejecuciones** se ve el error.
 - [ ] En Nidito → Lista → Bandeja → "Correos recibidos" se ve cada correo con su estado:
-      `done` (creó casas), `ignored` (sin casas reconocibles) o `error`.
+      `done` (creó casas), `ignored` (sin casas reconocibles) o `error`. Si una de las
+      casas de un correo no se pudo guardar, el detalle lo dice y las demás entran igual.
+- Si la función no responde (código distinto de 2xx), el hilo se queda con la etiqueta
+  **Nidito** y se reintenta en la siguiente pasada; los mensajes que sí llegaron no se
+  repiten.
+
+## Seguridad
+
+La función no tiene sesión, así que la protege el **código secreto** del cuerpo: se
+comprueba antes de leer nada (quien no lo tenga recibe un 403 sin gastar una llamada al
+modelo) y además hace falta la clave pública de Supabase en la cabecera `apikey` (el
+script la manda). Lo que diga el correo se trata como entrada no confiable: solo pasan los
+campos conocidos y bien tipados, y la base de datos ignora `id`, `status` o `inbox` aunque
+alguien los metiera en un correo. Si un día cambias el código en Ajustes, actualiza
+`NIDITO_TOKEN` en el script.
 
 ## Límites
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractProperties, htmlToText, splitPortalAlert } from './index'
+import { extractProperties, htmlToText, sanitise, splitPortalAlert } from './index'
 
 const ALERTA = `Hola Jesús, hay 2 casas nuevas que encajan con tu búsqueda.
 
@@ -50,5 +50,35 @@ describe('extractProperties', () => {
   it('un correo sin datos de casa se ignora', async () => {
     const { properties } = await extractProperties('inmo@norte.es', 'Cita', 'Nos vemos el martes a las 18:00.')
     expect(properties).toHaveLength(0)
+  })
+})
+
+describe('sanitise (lo que devuelve el modelo es entrada no confiable)', () => {
+  it('deja solo campos conocidos y bien tipados', () => {
+    const p = sanitise({
+      id: 'colado', status: 'descartada', inbox: 'aceptada', source: 'manual',
+      title: '  Piso bonito  ', price: '385.000', m2: 92.4, rooms: '3', baths: 2, type: 'casa',
+      exterior: 'sí', extras: { ascensor: true, terraza: null, garaje: 'no', orientacion: 'SUR', certificado: 'e', inventado: true },
+      url: 'javascript:alert(1)', agency: 'Norte', lat: 40.5, lng: 200,
+    }) as Record<string, unknown>
+    expect(p.title).toBe('Piso bonito')
+    expect(p.price).toBe(385000)
+    expect(p.m2).toBe(92)
+    expect(p.rooms).toBe(3)
+    expect(p.type).toBeUndefined()
+    expect(p.exterior).toBeNull()
+    expect(p.extras).toEqual({ ascensor: true, orientacion: 'sur', certificado: 'E' })
+    expect(p.url).toBeNull()
+    expect(p.lat).toBe(40.5)
+    expect(p.lng).toBeNull()
+    expect('id' in p).toBe(false)
+    expect('status' in p).toBe(false)
+    expect('inbox' in p).toBe(false)
+    expect('source' in p).toBe(false)
+  })
+  it('sin título no hay ficha; los enlaces http(s) sí pasan', () => {
+    expect(sanitise({ price: 1 })).toBeNull()
+    expect(sanitise('texto')).toBeNull()
+    expect(sanitise({ title: 'X', url: 'https://www.idealista.com/inmueble/1/' })?.url).toBe('https://www.idealista.com/inmueble/1/')
   })
 })
